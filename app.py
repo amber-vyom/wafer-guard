@@ -1,13 +1,20 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from pathlib import Path
+
+from src.services.prediction_service import predict_records
 
 st.set_page_config(
     page_title="Wafer Guard",
     page_icon="🔬",
     layout="wide"
 )
+
+ROOT = Path(__file__).resolve().parent
+DATA_PATH = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
+AUDIT_PATH = ROOT / "AUDIT.md"
 
 st.markdown("""
 <style>
@@ -35,13 +42,17 @@ st.sidebar.caption("AI-powered wafer anomaly detection")
 
 page = st.sidebar.radio(
     "Navigation",
-    ["Overview", "Dataset Explorer", "Model Evaluation", "Audit"]
+    [
+        "Overview",
+        "Dataset Explorer",
+        "Live Prediction",
+        "Model Evaluation",
+        "Audit"
+    ]
 )
 
 st.sidebar.divider()
 st.sidebar.caption("SECOM wafer telemetry")
-
-data_path = Path("data/raw/secom_telemetry_modified.csv")
 
 uploaded_file = st.sidebar.file_uploader(
     "Upload wafer CSV",
@@ -53,39 +64,42 @@ df = None
 try:
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
-    elif data_path.exists():
-        df = pd.read_csv(data_path)
-except Exception as e:
-    st.error(f"Could not read dataset: {e}")
+    elif DATA_PATH.exists():
+        df = pd.read_csv(DATA_PATH)
+except Exception as error:
+    st.error(f"Could not read dataset: {error}")
 
 st.sidebar.divider()
 st.sidebar.caption("Wafer Guard · AI/ML Challenge")
 
+st.title("Wafer Anomaly Monitor")
+st.caption("Semiconductor manufacturing · Sensor analytics · Experimental defect detection")
+
 if df is None:
-    st.title("Wafer Anomaly Monitor")
     st.warning("Upload your wafer telemetry CSV to begin.")
     st.stop()
 
 label_column = next(
     (
-        c for c in ["label", "pass_fail", "Pass/Fail", "target", "y"]
-        if c in df.columns
+        column for column in ["label", "pass_fail", "Pass/Fail", "target", "y"]
+        if column in df.columns
     ),
     None
 )
 
 if label_column is None:
     possible_labels = [
-        c for c in df.columns
-        if df[c].nunique(dropna=True) <= 3
-        and set(df[c].dropna().unique()).issubset({-1, 1, 0})
+        column for column in df.columns
+        if df[column].nunique(dropna=True) <= 3
+        and set(df[column].dropna().unique()).issubset({-1, 0, 1})
     ]
     if possible_labels:
         label_column = possible_labels[-1]
 
 sensor_columns = [
-    c for c in df.columns
-    if c != label_column and pd.api.types.is_numeric_dtype(df[c])
+    column for column in df.columns
+    if column != label_column
+    and pd.api.types.is_numeric_dtype(df[column])
 ]
 
 total_wafers = len(df)
@@ -95,9 +109,8 @@ missing_count = (
     if sensor_columns else 0
 )
 
-labels = None
-defect_count = None
 normal_count = None
+defect_count = None
 
 if label_column is not None:
     labels = pd.to_numeric(df[label_column], errors="coerce")
@@ -109,9 +122,6 @@ if label_column is not None:
     elif unique_labels.issubset({0, 1}):
         defect_count = int((labels == 1).sum())
         normal_count = int((labels == 0).sum())
-
-st.title("Wafer Anomaly Monitor")
-st.caption("Semiconductor manufacturing · Sensor analytics · Defect detection")
 
 if page == "Overview":
     st.subheader("Production Overview")
@@ -201,20 +211,14 @@ if page == "Overview":
         st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Model Status")
-
     st.warning(
-        "The current measured model has zero recall and zero F1 on the "
-        "held-out test set. It currently fails to detect defective wafers."
-    )
-
-    st.write(
-        "The dashboard displays dataset statistics and previously measured "
-        "model results. It does not claim live predictions."
+        "The current model achieved zero recall and zero F1 on the "
+        "held-out test set. It is experimental and should not be used "
+        "to make manufacturing decisions."
     )
 
 elif page == "Dataset Explorer":
     st.subheader("Dataset Explorer")
-
     st.write("Preview your wafer telemetry dataset.")
     st.dataframe(df.head(100), use_container_width=True)
 
@@ -231,10 +235,7 @@ elif page == "Dataset Explorer":
     st.subheader("Explore a Sensor")
 
     if sensor_columns:
-        selected_sensor = st.selectbox(
-            "Select a sensor",
-            sensor_columns
-        )
+        selected_sensor = st.selectbox("Select a sensor", sensor_columns)
 
         values = pd.to_numeric(
             df[selected_sensor],
@@ -272,6 +273,66 @@ elif page == "Dataset Explorer":
         mime="text/csv"
     )
 
+elif page == "Live Prediction":
+    st.subheader("Experimental Wafer Prediction")
+
+    st.warning(
+        "The model currently has zero recall on the held-out test set. "
+        "Predictions are experimental and may miss defective wafers."
+    )
+
+    st.write(
+        "Select a record from the loaded dataset and run it through "
+        "the saved model and preprocessing pipeline."
+    )
+
+    if total_wafers == 0:
+        st.info("The dataset contains no records.")
+    else:
+        record_index = st.number_input(
+            "Wafer record index",
+            min_value=0,
+            max_value=total_wafers - 1,
+            value=0,
+            step=1
+        )
+
+        if st.button("Run Prediction", type="primary"):
+            try:
+                result = predict_records(df.iloc[[int(record_index)]])
+
+                probability = result["probabilities"][0]
+                prediction = result["predictions"][0]
+                threshold = result["threshold"]
+                reconstruction_error = result["reconstruction_errors"][0]
+
+                a, b, c = st.columns(3)
+
+                a.metric("Defect Probability", f"{probability:.6f}")
+                b.metric("Classification Threshold", f"{threshold:.2f}")
+                c.metric("Reconstruction Error", f"{reconstruction_error:.6f}")
+
+                if prediction == 1:
+                    st.error("Model classification: Defective")
+                else:
+                    st.success("Model classification: Normal")
+
+                st.caption(
+                    f"Dataset record index: {int(record_index)}. "
+                    "This is a model output, not a verified wafer-quality result."
+                )
+
+                if label_column is not None:
+                    actual_label = df.iloc[int(record_index)][label_column]
+                    st.write(f"Dataset label (for reference): {actual_label}")
+
+            except Exception as error:
+                st.error(f"Prediction failed: {error}")
+                st.info(
+                    "Check that the CSV contains the required sensor columns "
+                    "and that the saved model artifacts are available."
+                )
+
 elif page == "Model Evaluation":
     st.subheader("Model Evaluation")
 
@@ -291,8 +352,8 @@ elif page == "Model Evaluation":
 
     columns = st.columns(3)
 
-    for i, (name, value) in enumerate(metrics):
-        columns[i % 3].metric(name, value)
+    for index, (name, value) in enumerate(metrics):
+        columns[index % 3].metric(name, value)
 
     st.subheader("Test Confusion Matrix")
 
@@ -305,11 +366,9 @@ elif page == "Model Evaluation":
     st.dataframe(matrix, use_container_width=True)
 
     st.caption(
-        "These are results from the previously measured test run. "
+        "These results are from the measured held-out test run. "
         "They are not recalculated for uploaded datasets."
     )
-
-    st.subheader("Interpretation")
 
     st.write("- The model correctly classified 296 normal wafers.")
     st.write("- It incorrectly flagged 1 normal wafer.")
@@ -341,16 +400,14 @@ elif page == "Audit":
 
     ### 4. Current Limitation
 
-    The current measured model has zero recall and zero F1 on the
-    held-out test set. It is not ready for production use.
+    The model currently has zero recall and zero F1 on the held-out
+    test set. It is not ready for production use.
     """)
 
-    audit_path = Path("AUDIT.md")
-
-    if audit_path.exists() and audit_path.stat().st_size > 0:
+    if AUDIT_PATH.exists() and AUDIT_PATH.stat().st_size > 0:
         st.download_button(
             "Download Audit Report",
-            audit_path.read_text(encoding="utf-8"),
+            AUDIT_PATH.read_text(encoding="utf-8"),
             file_name="AUDIT.md",
             mime="text/markdown"
         )

@@ -1,7 +1,7 @@
-
-from pathlib import Path
+﻿from pathlib import Path
 import sys
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT))
 from src.models.wafer_model import WaferAutoencoder
 
 DATA_PATH = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
+ARTIFACT_DIR = ROOT / "artifacts"
 
 torch.manual_seed(42)
 np.random.seed(42)
@@ -34,6 +35,7 @@ df["timestamp"] = pd.to_datetime(df["timestamp"], errors="raise")
 df = df.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
 
 sensor_cols = [c for c in df.columns if c.startswith("sensor_")]
+
 n = len(df)
 a = int(n * 0.70)
 b = int(n * 0.80)
@@ -83,6 +85,8 @@ flag_cols = [
     "legacy_sensor_1_code_300",
 ]
 
+feature_cols = usable_cols + flag_cols
+
 imputer = SimpleImputer(strategy="median")
 scaler = StandardScaler()
 
@@ -104,6 +108,7 @@ X_train = combine_features(train_scaled, X_train_raw)
 X_val = combine_features(val_scaled, X_val_raw)
 X_test = combine_features(test_scaled, X_test_raw)
 
+print("Input features:", X_train.shape[1])
 print("Train:", X_train.shape, "defects:", int(y_train.sum()))
 print("Validation:", X_val.shape, "defects:", int(y_val.sum()))
 print("Test:", X_test.shape, "defects:", int(y_test.sum()))
@@ -184,15 +189,8 @@ val_pred = (val_prob >= threshold).astype(int)
 print("\nValidation threshold:", float(threshold))
 print("Validation defects:", int(y_val.sum()))
 print("Validation predicted defects:", int(val_pred.sum()))
-print(
-    "Validation probability range:",
-    float(val_prob.min()),
-    float(val_prob.max()),
-)
-print(
-    "Validation confusion matrix:\n",
-    confusion_matrix(y_val, val_pred),
-)
+print("Validation confusion matrix:")
+print(confusion_matrix(y_val, val_pred))
 
 with torch.no_grad():
     test_logits = model(torch.tensor(X_test, dtype=torch.float32))[1]
@@ -213,11 +211,10 @@ if len(np.unique(y_test)) == 2:
 else:
     print("ROC-AUC: unavailable; test contains only one class")
 
-print("Test probability range:", float(test_prob.min()), float(test_prob.max()))
-print("Confusion matrix:\n", confusion_matrix(y_test, test_pred))
+print("Confusion matrix:")
+print(confusion_matrix(y_test, test_pred))
 
-artifact_dir = ROOT / "artifacts"
-artifact_dir.mkdir(exist_ok=True)
+ARTIFACT_DIR.mkdir(exist_ok=True)
 
 torch.save(
     {
@@ -225,7 +222,20 @@ torch.save(
         "input_dim": X_train.shape[1],
         "threshold": float(threshold),
     },
-    artifact_dir / "wafer_model.pt",
+    ARTIFACT_DIR / "wafer_model.pt",
 )
 
-print("\nModel saved to artifacts/wafer_model.pt")
+joblib.dump(
+    {
+        "sensor_cols": sensor_cols,
+        "usable_cols": usable_cols,
+        "flag_cols": flag_cols,
+        "feature_cols": feature_cols,
+        "imputer": imputer,
+        "scaler": scaler,
+    },
+    ARTIFACT_DIR / "preprocessor.joblib",
+)
+
+print("\nModel saved:", ARTIFACT_DIR / "wafer_model.pt")
+print("Preprocessor saved:", ARTIFACT_DIR / "preprocessor.joblib")
