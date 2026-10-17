@@ -37,3 +37,11 @@ unique_counts = df[sensor_cols].nunique(dropna=True)
 print(unique_counts[unique_counts <= 1])
 
 print("\nTimestamps sorted already:", df["timestamp"].is_monotonic_increasing)
+print("\nLabel distribution by month:")
+df["timestamp"] = pd.to_datetime(df["timestamp"])
+df["period"] = df["timestamp"].dt.to_period("M")
+print(pd.crosstab(df["period"], df["label"]))
+
+print("\nRows with missing timestamps:", df["timestamp"].isna().sum())
+print("Duplicate timestamps:", df["timestamp"].duplicated().sum())
+print("Duplicate full rows:", df.duplicated().sum())
