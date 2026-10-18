@@ -1,14 +1,14 @@
-﻿from pathlib import Path
+﻿
+from pathlib import Path
 import sys
 
 import joblib
 import numpy as np
 import pandas as pd
-import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -17,18 +17,23 @@ from sklearn.metrics import (
     confusion_matrix,
     average_precision_score,
     roc_auc_score,
+    precision_recall_fscore_support,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.models.wafer_model import WaferAutoencoder
-
 DATA_PATH = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
-ARTIFACT_DIR = ROOT / "artifacts"
 
-torch.manual_seed(42)
-np.random.seed(42)
+# Save this baseline separately; do not overwrite the PyTorch artifacts.
+ARTIFACT_DIR = ROOT / "artifacts"
+MODEL_PATH = ARTIFACT_DIR / "wafer_logistic_baseline.joblib"
+
+RANDOM_STATE = 42
+
+# --------------------------------------------------
+# 1. Load and chronologically sort the dataset
+# --------------------------------------------------
 
 df = pd.read_csv(DATA_PATH)
 df["timestamp"] = pd.to_datetime(df["timestamp"], errors="raise")
@@ -45,8 +50,13 @@ val_df = df.iloc[a:b].copy()
 test_df = df.iloc[b:].copy()
 
 
+# --------------------------------------------------
+# 2. Prepare sensor features and legacy indicators
+# --------------------------------------------------
+
 def get_features(part):
     X = part[sensor_cols].copy()
+
     legacy = X["sensor_0"].eq(0.0).fillna(False)
 
     X["is_legacy_ps_l"] = legacy.astype(float)
@@ -61,12 +71,18 @@ def get_features(part):
         ).astype(float)
 
     y = (part["label"] == 1).astype(np.int64).to_numpy()
+
     return X, y
 
 
 X_train_raw, y_train = get_features(train_df)
 X_val_raw, y_val = get_features(val_df)
 X_test_raw, y_test = get_features(test_df)
+
+
+# --------------------------------------------------
+# 3. Select features using training data only
+# --------------------------------------------------
 
 numeric_cols = [c for c in sensor_cols if c != "sensor_1"]
 
@@ -87,6 +103,7 @@ flag_cols = [
 
 feature_cols = usable_cols + flag_cols
 
+# Fit preprocessing only on the training partition.
 imputer = SimpleImputer(strategy="median")
 scaler = StandardScaler()
 
@@ -101,141 +118,153 @@ test_scaled = scaler.transform(test_imputed)
 
 def combine_features(scaled, raw):
     flags = raw[flag_cols].to_numpy(dtype=np.float32)
-    return np.column_stack([scaled, flags]).astype(np.float32)
+
+    return np.column_stack([
+        scaled,
+        flags,
+    ]).astype(np.float32)
 
 
 X_train = combine_features(train_scaled, X_train_raw)
 X_val = combine_features(val_scaled, X_val_raw)
 X_test = combine_features(test_scaled, X_test_raw)
 
+
+# --------------------------------------------------
+# 4. Print split information
+# --------------------------------------------------
+
+print("=" * 55)
+print("WAFER DEFECT DETECTION - LOGISTIC REGRESSION BASELINE")
+print("=" * 55)
+
 print("Input features:", X_train.shape[1])
-print("Train:", X_train.shape, "defects:", int(y_train.sum()))
+print("Training:", X_train.shape, "defects:", int(y_train.sum()))
 print("Validation:", X_val.shape, "defects:", int(y_val.sum()))
 print("Test:", X_test.shape, "defects:", int(y_test.sum()))
 print("Test prevalence:", round(float(y_test.mean()), 4))
 
-train_data = TensorDataset(
-    torch.tensor(X_train, dtype=torch.float32),
-    torch.tensor(y_train, dtype=torch.float32),
+
+# --------------------------------------------------
+# 5. Train classification-only baseline
+# --------------------------------------------------
+
+model = LogisticRegression(
+    class_weight="balanced",
+    max_iter=2000,
+    random_state=RANDOM_STATE,
 )
 
-train_loader = DataLoader(
-    train_data,
-    batch_size=64,
-    shuffle=True,
-)
+print("\nTraining Logistic Regression...")
+model.fit(X_train, y_train)
 
-model = WaferAutoencoder(input_dim=X_train.shape[1])
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-reconstruction_loss_fn = nn.MSELoss()
+print("Training completed.")
 
-positive_count = max(int(y_train.sum()), 1)
-negative_count = len(y_train) - positive_count
 
-positive_weight = torch.tensor([
-    negative_count / positive_count
-])
+# --------------------------------------------------
+# 6. Select threshold using validation data only
+# --------------------------------------------------
 
-classification_loss_fn = nn.BCEWithLogitsLoss(
-    pos_weight=positive_weight
-)
+val_prob = model.predict_proba(X_val)[:, 1]
 
-for epoch in range(1, 21):
-    model.train()
-    total_loss = 0.0
+print("\nVALIDATION RESULTS")
+print("Average precision:", round(
+    average_precision_score(y_val, val_prob), 5
+))
+print("ROC-AUC:", round(
+    roc_auc_score(y_val, val_prob), 5
+))
 
-    for batch_x, batch_y in train_loader:
-        optimizer.zero_grad()
+print("\nTHRESHOLD DIAGNOSTICS - VALIDATION ONLY")
+print("Threshold | Precision | Recall | F1 | TP | FP | FN | TN")
 
-        reconstructed, logits, _ = model(batch_x)
+best_threshold = 0.5
+best_f1 = -1.0
 
-        reconstruction_loss = reconstruction_loss_fn(
-            reconstructed, batch_x
-        )
-        classification_loss = classification_loss_fn(
-            logits, batch_y
-        )
+for threshold in np.arange(0.01, 1.00, 0.01):
+    val_pred = (val_prob >= threshold).astype(int)
 
-        loss = reconstruction_loss + classification_loss
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item() * len(batch_x)
-
-    print(
-        f"Epoch {epoch:02d}/20 - "
-        f"loss: {total_loss / len(train_data):.4f}"
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        y_val,
+        val_pred,
+        average="binary",
+        zero_division=0,
     )
 
-model.eval()
+    tp = int(((val_pred == 1) & (y_val == 1)).sum())
+    fp = int(((val_pred == 1) & (y_val == 0)).sum())
+    fn = int(((val_pred == 0) & (y_val == 1)).sum())
+    tn = int(((val_pred == 0) & (y_val == 0)).sum())
 
-with torch.no_grad():
-    val_logits = model(torch.tensor(X_val, dtype=torch.float32))[1]
-    val_prob = torch.sigmoid(val_logits).numpy()
+    if f1 > best_f1:
+        best_f1 = float(f1)
+        best_threshold = float(threshold)
 
-thresholds = np.arange(0.05, 0.96, 0.05)
+    # Print every 10th threshold to keep the output readable.
+    if round(threshold * 100) % 10 == 0:
+        print(
+            f"{threshold:9.2f} | {precision:9.3f} | "
+            f"{recall:6.3f} | {f1:4.3f} | "
+            f"{tp:2d} | {fp:2d} | {fn:2d} | {tn:3d}"
+        )
 
-threshold = max(
-    thresholds,
-    key=lambda value: f1_score(
-        y_val,
-        (val_prob >= value).astype(int),
-        zero_division=0,
-    ),
-)
+print("\nSelected threshold:", best_threshold)
+print("Best validation F1:", round(best_f1, 5))
 
-val_pred = (val_prob >= threshold).astype(int)
 
-print("\nValidation threshold:", float(threshold))
-print("Validation defects:", int(y_val.sum()))
-print("Validation predicted defects:", int(val_pred.sum()))
-print("Validation confusion matrix:")
-print(confusion_matrix(y_val, val_pred))
+# --------------------------------------------------
+# 7. Evaluate the untouched test partition once
+# --------------------------------------------------
 
-with torch.no_grad():
-    test_logits = model(torch.tensor(X_test, dtype=torch.float32))[1]
-    test_prob = torch.sigmoid(test_logits).numpy()
-
-test_pred = (test_prob >= threshold).astype(int)
+test_prob = model.predict_proba(X_test)[:, 1]
+test_pred = (test_prob >= best_threshold).astype(int)
 
 print("\nFINAL TEST RESULTS")
-print("Test prevalence:", float(y_test.mean()))
-print("Accuracy:", accuracy_score(y_test, test_pred))
-print("Precision:", precision_score(y_test, test_pred, zero_division=0))
-print("Recall:", recall_score(y_test, test_pred, zero_division=0))
-print("F1:", f1_score(y_test, test_pred, zero_division=0))
-print("Average precision:", average_precision_score(y_test, test_prob))
+print("Threshold:", best_threshold)
+print("Test prevalence:", round(float(y_test.mean()), 5))
+print("Accuracy:", round(accuracy_score(y_test, test_pred), 5))
+print("Precision:", round(
+    precision_score(y_test, test_pred, zero_division=0), 5
+))
+print("Recall:", round(
+    recall_score(y_test, test_pred, zero_division=0), 5
+))
+print("F1:", round(
+    f1_score(y_test, test_pred, zero_division=0), 5
+))
+print("Average precision:", round(
+    average_precision_score(y_test, test_prob), 5
+))
 
 if len(np.unique(y_test)) == 2:
-    print("ROC-AUC:", roc_auc_score(y_test, test_prob))
+    print("ROC-AUC:", round(roc_auc_score(y_test, test_prob), 5))
 else:
-    print("ROC-AUC: unavailable; test contains only one class")
+    print("ROC-AUC unavailable: test contains only one class")
 
 print("Confusion matrix:")
 print(confusion_matrix(y_test, test_pred))
 
-ARTIFACT_DIR.mkdir(exist_ok=True)
 
-torch.save(
-    {
-        "model_state_dict": model.state_dict(),
-        "input_dim": X_train.shape[1],
-        "threshold": float(threshold),
-    },
-    ARTIFACT_DIR / "wafer_model.pt",
-)
+# --------------------------------------------------
+# 8. Save the baseline separately
+# --------------------------------------------------
+
+ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
 joblib.dump(
     {
+        "model": model,
         "sensor_cols": sensor_cols,
         "usable_cols": usable_cols,
         "flag_cols": flag_cols,
         "feature_cols": feature_cols,
         "imputer": imputer,
         "scaler": scaler,
+        "threshold": best_threshold,
+        "model_type": "logistic_regression_baseline",
     },
-    ARTIFACT_DIR / "preprocessor.joblib",
+    MODEL_PATH,
 )
 
-print("\nModel saved:", ARTIFACT_DIR / "wafer_model.pt")
-print("Preprocessor saved:", ARTIFACT_DIR / "preprocessor.joblib")
+print("\nBaseline saved:", MODEL_PATH)
+print("Original PyTorch model and preprocessor were not overwritten.")
