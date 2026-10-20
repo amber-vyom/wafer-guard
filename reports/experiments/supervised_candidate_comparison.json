@@ -1,0 +1,56 @@
+{
+  "purpose": "validation-only candidate comparison; no test evaluation",
+  "dataset_rows": 1567,
+  "sensor_columns": 590,
+  "train_rows": 1096,
+  "train_defects": 78,
+  "validation_rows": 157,
+  "validation_defects": 9,
+  "feature_count": 472,
+  "scikit_learn_version": "1.9.1",
+  "candidates": [
+    {
+      "model": "logistic_regression",
+      "threshold": 7.91582104768887e-14,
+      "validation_precision": 0.06,
+      "validation_recall": 1.0,
+      "validation_f1": 0.11320754716981132,
+      "validation_average_precision": 0.04342097408215933,
+      "validation_roc_auc": 0.2972972972972973,
+      "validation_tp": 9,
+      "validation_fp": 141,
+      "validation_fn": 0,
+      "validation_tn": 7,
+      "candidate_artifact": "artifacts\\experiments\\wafer_logistic_regression_candidate.joblib"
+    },
+    {
+      "model": "random_forest",
+      "threshold": 0.06366413280473862,
+      "validation_precision": 0.1111111111111111,
+      "validation_recall": 0.3333333333333333,
+      "validation_f1": 0.16666666666666666,
+      "validation_average_precision": 0.07806275600513679,
+      "validation_roc_auc": 0.536036036036036,
+      "validation_tp": 3,
+      "validation_fp": 24,
+      "validation_fn": 6,
+      "validation_tn": 124,
+      "candidate_artifact": "artifacts\\experiments\\wafer_random_forest_candidate.joblib"
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "threshold": 0.0012808768372287369,
+      "validation_precision": 0.08247422680412371,
+      "validation_recall": 0.8888888888888888,
+      "validation_f1": 0.1509433962264151,
+      "validation_average_precision": 0.06726893787281217,
+      "validation_roc_auc": 0.5503003003003003,
+      "validation_tp": 8,
+      "validation_fp": 89,
+      "validation_fn": 1,
+      "validation_tn": 59,
+      "candidate_artifact": "artifacts\\experiments\\wafer_hist_gradient_boosting_candidate.joblib"
+    }
+  ],
+  "caution": "Validation contains few defects, so threshold and metrics are unstable. Do not promote a candidate based on this report alone. The test split must remain untouched until candidate/threshold selection is complete."
+}

@@ -1,415 +1,132 @@
-
-import streamlit as st
+﻿from pathlib import Path
+import numpy as np
 import pandas as pd
-import plotly.express as px
-from pathlib import Path
-
-from src.services.prediction_service import predict_records
-
-st.set_page_config(
-    page_title="Wafer Guard",
-    page_icon="🔬",
-    layout="wide"
+import streamlit as st
+import matplotlib.pyplot as plt
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    roc_auc_score, average_precision_score
 )
+from src.services.prediction_service import predict_records
 
 ROOT = Path(__file__).resolve().parent
 DATA_PATH = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
-AUDIT_PATH = ROOT / "AUDIT.md"
 
-st.markdown("""
-<style>
-.stApp {
-    background: #0b1120;
-    color: #e5e7eb;
-}
-[data-testid="stSidebar"] {
-    background: #111827;
-}
-[data-testid="stMetric"] {
-    background: #172033;
-    padding: 18px;
-    border-radius: 12px;
-    border: 1px solid #263449;
-}
-h1, h2, h3 {
-    color: #f8fafc;
-}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="WaferGuard", page_icon="🔬", layout="centered")
 
-st.sidebar.title("🔬 Wafer Guard")
-st.sidebar.caption("AI-powered wafer anomaly detection")
-
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Overview",
-        "Dataset Explorer",
-        "Live Prediction",
-        "Model Evaluation",
-        "Audit"
-    ]
+st.title("WaferGuard")
+st.subheader("Problem Statement")
+st.write(
+    "To detect potentially defective semiconductor wafers using machine "
+    "learning on sensor telemetry data."
 )
 
-st.sidebar.divider()
-st.sidebar.caption("SECOM wafer telemetry")
-
-uploaded_file = st.sidebar.file_uploader(
-    "Upload wafer CSV",
-    type=["csv"]
-)
-
-df = None
-
-try:
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-    elif DATA_PATH.exists():
-        df = pd.read_csv(DATA_PATH)
-except Exception as error:
-    st.error(f"Could not read dataset: {error}")
-
-st.sidebar.divider()
-st.sidebar.caption("Wafer Guard · AI/ML Challenge")
-
-st.title("Wafer Anomaly Monitor")
-st.caption("Semiconductor manufacturing · Sensor analytics · Experimental defect detection")
-
-if df is None:
-    st.warning("Upload your wafer telemetry CSV to begin.")
+if not DATA_PATH.exists():
+    st.error(f"Dataset not found: {DATA_PATH}")
     st.stop()
 
-label_column = next(
-    (
-        column for column in ["label", "pass_fail", "Pass/Fail", "target", "y"]
-        if column in df.columns
-    ),
-    None
-)
+df = pd.read_csv(DATA_PATH)
 
-if label_column is None:
-    possible_labels = [
-        column for column in df.columns
-        if df[column].nunique(dropna=True) <= 3
-        and set(df[column].dropna().unique()).issubset({-1, 0, 1})
+st.button("Run Model", type="primary", key="run_model")
+
+if st.session_state.get("run_model", False):
+    # Use the final chronological 20% as the test segment.
+    time_cols = [
+        c for c in df.columns
+        if str(c).lower().replace("_", "").replace(" ", "")
+        in {"time", "timestamp", "date", "datetime"}
     ]
-    if possible_labels:
-        label_column = possible_labels[-1]
+    target_cols = [
+        c for c in df.columns
+        if str(c).lower().replace("_", "").replace(" ", "").replace("-", "")
+        in {"pass/fail", "passfail", "target", "label", "class"}
+    ]
 
-sensor_columns = [
-    column for column in df.columns
-    if column != label_column
-    and pd.api.types.is_numeric_dtype(df[column])
-]
+    if len(time_cols) != 1 or len(target_cols) != 1:
+        st.error("Could not identify the dataset timestamp and target columns.")
+        st.stop()
 
-total_wafers = len(df)
-sensor_count = len(sensor_columns)
-missing_count = (
-    int(df[sensor_columns].isna().sum().sum())
-    if sensor_columns else 0
-)
+    time_col, target_col = time_cols[0], target_cols[0]
+    df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
 
-normal_count = None
-defect_count = None
+    if df[time_col].isna().any():
+        st.error("Invalid timestamps found. Test evaluation was stopped.")
+        st.stop()
 
-if label_column is not None:
-    labels = pd.to_numeric(df[label_column], errors="coerce")
-    unique_labels = set(labels.dropna().unique())
+    df = df.sort_values(time_col).reset_index(drop=True)
+    test = df.iloc[int(len(df) * 0.8):].copy()
+    labels = pd.to_numeric(test[target_col], errors="coerce")
 
-    if unique_labels.issubset({-1, 1}):
-        defect_count = int((labels == 1).sum())
-        normal_count = int((labels == -1).sum())
-    elif unique_labels.issubset({0, 1}):
-        defect_count = int((labels == 1).sum())
-        normal_count = int((labels == 0).sum())
+    if labels.isna().any() or not set(labels.unique()).issubset({-1, 1}):
+        st.error("Expected target labels -1 and +1; cannot evaluate safely.")
+        st.stop()
 
-if page == "Overview":
-    st.subheader("Production Overview")
+    y_true = (labels.to_numpy() == 1).astype(int)
 
-    c1, c2, c3, c4 = st.columns(4)
+    try:
+        result = predict_records(test)
+        scores = np.asarray(result["probabilities"], dtype=float)
+        y_pred = np.asarray(result["predictions"], dtype=int)
+        threshold = float(result["threshold"])
+    except Exception as exc:
+        st.error(f"Model evaluation failed: {exc}")
+        st.stop()
 
-    c1.metric("Total Wafers", f"{total_wafers:,}")
-    c2.metric("Sensor Features", f"{sensor_count:,}")
-    c3.metric("Missing Readings", f"{missing_count:,}")
+    if len(scores) != len(test) or len(y_pred) != len(test):
+        st.error("Prediction count does not match test dataset size.")
+        st.stop()
 
-    if defect_count is not None:
-        prevalence = defect_count / total_wafers if total_wafers else 0
-        c4.metric(
-            "Defective Wafers",
-            f"{defect_count:,}",
-            f"{prevalence:.2%} prevalence"
-        )
-    else:
-        c4.metric("Defective Wafers", "Labels unavailable")
-
-    st.divider()
-
-    left, right = st.columns(2)
-
-    with left:
-        st.subheader("Dataset Snapshot")
-        st.write(f"**Rows:** {total_wafers:,}")
-        st.write(f"**Numeric sensor columns:** {sensor_count:,}")
-        st.write(f"**Missing sensor cells:** {missing_count:,}")
-        st.write(f"**Label column:** {label_column or 'Not detected'}")
-
-    with right:
-        st.subheader("Defect Distribution")
-
-        if normal_count is not None and defect_count is not None:
-            chart_data = pd.DataFrame({
-                "Class": ["Normal", "Defective"],
-                "Count": [normal_count, defect_count]
-            })
-
-            fig = px.bar(
-                chart_data,
-                x="Class",
-                y="Count",
-                color="Class",
-                color_discrete_map={
-                    "Normal": "#22c55e",
-                    "Defective": "#ef4444"
-                },
-                template="plotly_dark",
-                text="Count"
-            )
-
-            fig.update_layout(
-                paper_bgcolor="#0b1120",
-                plot_bgcolor="#0b1120",
-                showlegend=False
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Could not identify the label encoding automatically.")
-
-    st.subheader("Sensor Missingness")
-
-    if sensor_columns:
-        missing_by_sensor = (
-            df[sensor_columns]
-            .isna()
-            .sum()
-            .sort_values(ascending=False)
-            .head(15)
-            .reset_index()
-        )
-
-        missing_by_sensor.columns = ["Sensor", "Missing Values"]
-
-        fig = px.bar(
-            missing_by_sensor,
-            x="Sensor",
-            y="Missing Values",
-            color="Missing Values",
-            template="plotly_dark",
-            color_continuous_scale="Teal"
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Model Status")
-    st.warning(
-        "The current model achieved zero recall and zero F1 on the "
-        "held-out test set. It is experimental and should not be used "
-        "to make manufacturing decisions."
-    )
-
-elif page == "Dataset Explorer":
-    st.subheader("Dataset Explorer")
-    st.write("Preview your wafer telemetry dataset.")
-    st.dataframe(df.head(100), use_container_width=True)
-
-    st.subheader("Column Summary")
-
-    summary = pd.DataFrame({
-        "Data Type": df.dtypes.astype(str),
-        "Missing Values": df.isna().sum(),
-        "Unique Values": df.nunique(dropna=True)
-    })
-
-    st.dataframe(summary, use_container_width=True)
-
-    st.subheader("Explore a Sensor")
-
-    if sensor_columns:
-        selected_sensor = st.selectbox("Select a sensor", sensor_columns)
-
-        values = pd.to_numeric(
-            df[selected_sensor],
-            errors="coerce"
-        ).dropna()
-
-        if not values.empty:
-            a, b, c = st.columns(3)
-            a.metric("Mean", f"{values.mean():.4f}")
-            b.metric("Standard Deviation", f"{values.std():.4f}")
-            c.metric(
-                "Missing Values",
-                f"{df[selected_sensor].isna().sum():,}"
-            )
-
-            fig = px.histogram(
-                values,
-                nbins=40,
-                labels={"value": selected_sensor},
-                title=f"Distribution of {selected_sensor}",
-                template="plotly_dark"
-            )
-
-            fig.update_layout(
-                paper_bgcolor="#0b1120",
-                plot_bgcolor="#0b1120"
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-    st.download_button(
-        "Download Dataset Preview",
-        df.head(1000).to_csv(index=False).encode("utf-8"),
-        file_name="wafer_dataset_preview.csv",
-        mime="text/csv"
-    )
-
-elif page == "Live Prediction":
-    st.subheader("Experimental Wafer Prediction")
-
-    st.warning(
-        "The model currently has zero recall on the held-out test set. "
-        "Predictions are experimental and may miss defective wafers."
-    )
-
-    st.write(
-        "Select a record from the loaded dataset and run it through "
-        "the saved model and preprocessing pipeline."
-    )
-
-    if total_wafers == 0:
-        st.info("The dataset contains no records.")
-    else:
-        record_index = st.number_input(
-            "Wafer record index",
-            min_value=0,
-            max_value=total_wafers - 1,
-            value=0,
-            step=1
-        )
-
-        if st.button("Run Prediction", type="primary"):
-            try:
-                result = predict_records(df.iloc[[int(record_index)]])
-
-                probability = result["probabilities"][0]
-                prediction = result["predictions"][0]
-                threshold = result["threshold"]
-                reconstruction_error = result["reconstruction_errors"][0]
-
-                a, b, c = st.columns(3)
-
-                a.metric("Defect Probability", f"{probability:.6f}")
-                b.metric("Classification Threshold", f"{threshold:.2f}")
-                c.metric("Reconstruction Error", f"{reconstruction_error:.6f}")
-
-                if prediction == 1:
-                    st.error("Model classification: Defective")
-                else:
-                    st.success("Model classification: Normal")
-
-                st.caption(
-                    f"Dataset record index: {int(record_index)}. "
-                    "This is a model output, not a verified wafer-quality result."
-                )
-
-                if label_column is not None:
-                    actual_label = df.iloc[int(record_index)][label_column]
-                    st.write(f"Dataset label (for reference): {actual_label}")
-
-            except Exception as error:
-                st.error(f"Prediction failed: {error}")
-                st.info(
-                    "Check that the CSV contains the required sensor columns "
-                    "and that the saved model artifacts are available."
-                )
-
-elif page == "Model Evaluation":
-    st.subheader("Model Evaluation")
-
-    st.warning(
-        "The current trained model failed to identify defective wafers "
-        "in the held-out test set. Accuracy alone is misleading."
-    )
+    tn = int(((y_true == 0) & (y_pred == 0)).sum())
+    fp = int(((y_true == 0) & (y_pred == 1)).sum())
+    fn = int(((y_true == 1) & (y_pred == 0)).sum())
+    tp = int(((y_true == 1) & (y_pred == 1)).sum())
 
     metrics = [
-        ("Accuracy", "94.27%"),
-        ("Precision", "0.00"),
-        ("Recall", "0.00"),
-        ("F1 Score", "0.00"),
-        ("Average Precision", "0.0948"),
-        ("ROC-AUC", "0.6324")
+        ("Test records", len(test)),
+        ("Actual defects", int(y_true.sum())),
+        ("Defects detected", f"{tp}/{int(y_true.sum())}"),
+        ("Defects missed", fn),
+        ("False alarms", fp),
+        ("Accuracy", f"{accuracy_score(y_true, y_pred):.2%}"),
+        ("Precision", f"{precision_score(y_true, y_pred, zero_division=0):.2%}"),
+        ("Recall", f"{recall_score(y_true, y_pred, zero_division=0):.2%}"),
+        ("F1 Score", f"{f1_score(y_true, y_pred, zero_division=0):.4f}"),
+        ("ROC-AUC", f"{roc_auc_score(y_true, scores):.4f}"
+         if len(np.unique(y_true)) == 2 else "Unavailable"),
+        ("Average Precision", f"{average_precision_score(y_true, scores):.4f}"),
+        ("Saved threshold", f"{threshold:.8f}"),
     ]
 
-    columns = st.columns(3)
+    st.subheader("Final Model — Test Results")
+    st.caption("Results are calculated from the saved model on the final chronological 20% of the dataset.")
+    st.table(pd.DataFrame(metrics, columns=["Evaluation Metric", "Result"]))
 
-    for index, (name, value) in enumerate(metrics):
-        columns[index % 3].metric(name, value)
+    st.subheader("Model Performance Graph")
+    graph_values = {
+        "Accuracy": accuracy_score(y_true, y_pred) * 100,
+        "Precision": precision_score(y_true, y_pred, zero_division=0) * 100,
+        "Recall": recall_score(y_true, y_pred, zero_division=0) * 100,
+        "F1 Score": f1_score(y_true, y_pred, zero_division=0) * 100,
+    }
 
-    st.subheader("Test Confusion Matrix")
+    fig, ax = plt.subplots(figsize=(8, 3.5))
+    bars = ax.bar(graph_values.keys(), graph_values.values())
+    ax.set_ylabel("Score (%)")
+    ax.set_ylim(0, 100)
+    ax.bar_label(bars, fmt="%.1f%%", padding=3)
+    ax.set_title("Saved PyTorch Model — Test Metrics")
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
 
-    matrix = pd.DataFrame(
-        [[296, 1], [17, 0]],
-        index=["Actual Normal", "Actual Defective"],
-        columns=["Predicted Normal", "Predicted Defective"]
+    st.subheader("About Our Model")
+    st.write(
+        "WaferGuard uses a saved PyTorch autoencoder to identify potentially "
+        "anomalous sensor records. Its predictions are compared with known "
+        "test labels to calculate the reported evaluation metrics."
     )
-
-    st.dataframe(matrix, use_container_width=True)
-
-    st.caption(
-        "These results are from the measured held-out test run. "
-        "They are not recalculated for uploaded datasets."
+    st.warning(
+        f"The model missed {fn} of {int(y_true.sum())} actual defects in this "
+        "evaluation. It is an experimental prototype, not a production-ready "
+        "inspection system. An unflagged record is not guaranteed defect-free."
     )
-
-    st.write("- The model correctly classified 296 normal wafers.")
-    st.write("- It incorrectly flagged 1 normal wafer.")
-    st.write("- It missed all 17 defective wafers.")
-    st.write("- The model requires improvement before practical use.")
-
-elif page == "Audit":
-    st.subheader("Audit and Safeguards")
-
-    st.markdown("""
-    ### 1. Data Leakage
-
-    - Split data chronologically.
-    - Fit preprocessing transformations on training data only.
-    - Use validation data for threshold selection.
-    - Keep the test set for final evaluation.
-
-    ### 2. Legacy Sensor Handling
-
-    - Treat `sensor_0 == 0.0` according to the legacy sentinel rule.
-    - Preserve categorical meanings of `sensor_1` values 100, 200,
-      and 300 for legacy wafers.
-
-    ### 3. Model Integrity
-
-    - Match reconstruction and input tensor shapes.
-    - Preserve valid gradient paths during training.
-    - Avoid using accuracy as the only performance measure.
-
-    ### 4. Current Limitation
-
-    The model currently has zero recall and zero F1 on the held-out
-    test set. It is not ready for production use.
-    """)
-
-    if AUDIT_PATH.exists() and AUDIT_PATH.stat().st_size > 0:
-        st.download_button(
-            "Download Audit Report",
-            AUDIT_PATH.read_text(encoding="utf-8"),
-            file_name="AUDIT.md",
-            mime="text/markdown"
-        )
-
-st.sidebar.success("Dashboard running locally")

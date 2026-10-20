@@ -1,0 +1,15 @@
+{
+  "model": "Tuned Gradient Boosting",
+  "test_records": 314,
+  "actual_defects": 17,
+  "true_positives_detected": 0,
+  "false_negatives_missed": 17,
+  "false_positives": 5,
+  "true_negatives": 292,
+  "defect_detection_rate_percent": 0.0,
+  "precision_percent": 0.0,
+  "f1_score": 0.0,
+  "threshold": 0.5,
+  "average_precision": 0.0696,
+  "roc_auc": 0.5837
+}
