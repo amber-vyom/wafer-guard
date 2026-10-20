@@ -1,0 +1,27 @@
+{
+  "train_rows": 1096,
+  "train_defects": 78,
+  "validation_rows": 157,
+  "validation_defects": 9,
+  "sensors": [
+    "sensor_244",
+    "sensor_245",
+    "sensor_246",
+    "sensor_111",
+    "sensor_109",
+    "sensor_519",
+    "sensor_247",
+    "sensor_385",
+    "sensor_393",
+    "sensor_255",
+    "sensor_527",
+    "sensor_440",
+    "sensor_130",
+    "sensor_169",
+    "sensor_480",
+    "sensor_129"
+  ],
+  "detail_csv": "A:\\05_Wafer\\wafer-guard\\reports\\experiments\\targeted_sensor_class_detail.csv",
+  "summary_csv": "A:\\05_Wafer\\wafer-guard\\reports\\experiments\\targeted_sensor_class_summary.csv",
+  "note": "Descriptive diagnostics only; association is not proof of predictive usefulness."
+}

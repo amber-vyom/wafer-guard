@@ -1,0 +1,49 @@
+{
+  "purpose": "time-aware diagnostic on first 70% training period only",
+  "dataset_rows": 1567,
+  "training_period_rows": 1096,
+  "training_period_defects": 78,
+  "n_splits": 4,
+  "fold_metrics_csv": "reports\\experiments\\chronological_cv_fold_metrics.csv",
+  "summary_csv": "reports\\experiments\\chronological_cv_summary.csv",
+  "oof_predictions_csv": "reports\\experiments\\chronological_cv_oof_predictions.csv",
+  "summary": [
+    {
+      "model": "logistic_regression",
+      "oof_rows": 876,
+      "oof_defects": 48,
+      "oof_prevalence": 0.0547945205479452,
+      "oof_average_precision": 0.0670707761627529,
+      "oof_roc_auc": 0.5615690418679549,
+      "fold_ap_mean": 0.09163805935367901,
+      "fold_ap_std": 0.03272756369071097,
+      "fold_auc_mean": 0.5702769162806247,
+      "fold_auc_std": 0.08702626771577907
+    },
+    {
+      "model": "random_forest",
+      "oof_rows": 876,
+      "oof_defects": 48,
+      "oof_prevalence": 0.0547945205479452,
+      "oof_average_precision": 0.10372916730801228,
+      "oof_roc_auc": 0.6597977053140096,
+      "fold_ap_mean": 0.14738650940444586,
+      "fold_ap_std": 0.032911213322472224,
+      "fold_auc_mean": 0.5892365612748587,
+      "fold_auc_std": 0.09203394193347882
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "oof_rows": 876,
+      "oof_defects": 48,
+      "oof_prevalence": 0.0547945205479452,
+      "oof_average_precision": 0.12269778040552329,
+      "oof_roc_auc": 0.6531803542673108,
+      "fold_ap_mean": 0.13886176891707097,
+      "fold_ap_std": 0.03153719822844562,
+      "fold_auc_mean": 0.6174522137747631,
+      "fold_auc_std": 0.08277127603314939
+    }
+  ],
+  "caution": "OOF scores are diagnostic, not a final unbiased estimate. Thresholds were not tuned here. Keep the original 70%-80% validation and final 20% test period for later steps. Do not promote based on this report alone."
+}

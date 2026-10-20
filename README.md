@@ -1,247 +1,101 @@
-# WaferGuard: Wafer Defect Detection and Monitoring
+﻿# WaferGuard — Wafer Defect Anomaly Detection
 
-WaferGuard is an experimental wafer anomaly detection application built to explore semiconductor manufacturing data, sensor preprocessing, machine learning, and interactive monitoring.
+## 1. Overview
+WaferGuard is a Python-based prototype for analyzing semiconductor wafer sensor data and identifying potentially defective records using machine learning. The application provides a Streamlit interface with a Run Model button, results table, and graph.
 
-The project combines a saved PyTorch model, a preprocessing pipeline, and a Streamlit dashboard for wafer-level predictions and evaluation.
+## 2. Problem Statement
+Semiconductor manufacturing generates large amounts of sensor telemetry. Detecting unusual patterns can help identify wafers that require further inspection. WaferGuard demonstrates a machine-learning workflow for analyzing sensor measurements and displaying prediction results.
 
-**Project status:** Academic prototype prepared for submission. The current model is frozen. The application runs, but its defect detection performance is not suitable for production use.
+## 3. Objectives
+- Load and preprocess sensor telemetry.
+- Apply a PyTorch-based anomaly detection model.
+- Display predictions through a Streamlit dashboard.
+- Evaluate model performance using held-out test data.
+- Keep experimental model artifacts separate from application artifacts.
 
-## 1. Project Objectives
+## 4. Dataset
+File: `data/raw/secom_telemetry_modified.csv`
 
-- Explore semiconductor wafer sensor data.
-- Build a preprocessing pipeline for high-dimensional sensor measurements.
-- Handle missing sensor values and legacy PS-L sensor records.
-- Generate anomaly probabilities and reconstruction errors.
-- Present results through an interactive dashboard.
-- Evaluate performance using measures suitable for imbalanced classification.
-- Document limitations and maintain reproducible experiments.
+- Total records: 1,567
+- Normal label: -1
+- Defect label: +1
+- Training: 1,096 records, 78 defects
+- Validation: 157 records, 9 defects
+- Testing: 314 records, 17 defects
 
-## 2. Dataset Overview
+The data is split chronologically into training, validation, and test sets using a 70/10/20 split.
 
-The dataset contains 1,567 wafer records and 590 sensor columns.
+## 5. Technology Stack
+- Python
+- PyTorch
+- Pandas and NumPy
+- Scikit-learn
+- Streamlit
+- Joblib
+- Pytest
 
-| Dataset characteristic | Value |
+## 6. Architecture
+1. Load sensor data from CSV.
+2. Convert numeric values and handle missing measurements.
+3. Scale sensor features and construct additional sensor flags.
+4. Load the saved PyTorch model and preprocessor.
+5. Generate prediction scores and classifications.
+6. Display results in the Streamlit interface.
+7. Evaluate the model using separate evaluation scripts.
+
+## 7. Main Files
+- `app.py` — Streamlit application.
+- `src/models/wafer_model.py` — PyTorch model definition.
+- `src/services/prediction_service.py` — Prediction service.
+- `artifacts/wafer_model.pt` — Existing application model.
+- `artifacts/preprocessor.joblib` — Existing application preprocessor.
+- `artifacts/experiments/` — Experimental models and reports.
+
+## 8. Existing Model Evaluation
+Test records: 314
+Actual defects: 17
+
+| Metric | Result |
 |---|---:|
-| Total records | 1,567 |
-| Sensor columns | 590 |
-| Normal records | 1,463 |
-| Defective records | 104 |
-| Missing sensor cells | 41,948 |
-| Defect prevalence | Approximately 6.64% |
+| Defects detected | 2 of 17 |
+| Defects missed | 15 |
+| False alarms | 17 |
+| Precision | 10.53% |
+| Recall | 11.76% |
+| F1-score | 11.11% |
+| ROC-AUC | 0.6599 |
 
-Defects are a minority class, so accuracy alone is not a reliable measure of model quality.
+A separate experimental candidate detected 0 of 17 test defects and was not promoted. The existing PyTorch model remains the application model.
 
-### Chronological data split
-
-| Partition | Records | Defect prevalence |
-|---|---:|---:|
-| Training | 1,096 | 7.12% |
-| Validation | 157 | 5.73% |
-| Test | 314 | 5.41% |
-
-The held-out test partition contains 17 defective records.
-
-## 3. Technology Stack
-
-- **Python** — application and data processing
-- **PyTorch** — autoencoder and classification model
-- **scikit-learn** — preprocessing and evaluation utilities
-- **Pandas and NumPy** — data manipulation
-- **Streamlit** — interactive web dashboard
-- **Plotly** — data visualization
-- **Joblib** — saved preprocessing objects
-
-## 4. Application Features
-
-The Streamlit dashboard contains five pages.
-
-### Overview
-Provides a high-level introduction to the application and its current model limitations.
-
-### Dataset Explorer
-Supports exploration of the available dataset and sensor measurements.
-
-### Live Prediction
-Accepts sensor records for inference and displays model probabilities, the classification threshold, reconstruction errors, and available dataset labels for reference.
-
-### Model Evaluation
-Displays recorded test evaluation metrics and a confusion matrix. These are fixed recorded results; they are not recalculated for uploaded datasets.
-
-### Audit
-Documents preprocessing safeguards, legacy sensor handling, evaluation limitations, and future improvement areas.
-
-## 5. System Architecture
-
-The application follows this inference workflow:
-
-1. Receive wafer sensor data.
-2. Validate the required sensor columns.
-3. Convert sensor values to numeric data.
-4. Apply legacy PS-L sensor handling.
-5. Impute missing values using the saved preprocessor.
-6. Scale measurements and prepare indicator features.
-7. Load the saved PyTorch model.
-8. Generate classification probabilities and reconstruction errors.
-9. Apply the saved classification threshold.
-10. Display results in the Streamlit dashboard.
-
-The deployed model and preprocessing artifacts are stored locally under `artifacts/`.
-
-## 6. Model Evaluation and Limitations
-
-The repository contains multiple recorded evaluation results. The dashboard and the earlier audit report have not been reconciled to a single model checkpoint and evaluation run. Their metrics are therefore documented separately.
-
-### Dashboard-displayed evaluation
-
-| Metric | Recorded result |
-|---|---:|
-| Test records | 314 |
-| Actual defects | 17 |
-| Accuracy | 94.27% |
-| Precision | 0.00 |
-| Recall | 0.00 |
-| F1 score | 0.00 |
-| Average precision | 0.0948 |
-| ROC-AUC | 0.6324 |
-
-Dashboard-displayed confusion matrix:
-
-```text
-                 Predicted Normal  Predicted Defective
-Actual Normal                296                    1
-Actual Defective              17                    0
-```
-
-The model missed all 17 defective records in this displayed result. The 94.27% accuracy is misleading because the model did not identify any defects.
-
-The confusion matrix supports the classification counts and derived classification metrics. Average precision and ROC-AUC are recorded values that have not been independently verified from the displayed matrix.
-
-### Previously documented audit evaluation
-
-The earlier audit recorded a separate evaluation at a threshold of 0.01:
-
-| Metric | Previously recorded result |
-|---|---:|
-| Accuracy | 93.31% |
-| Precision | 0.0000 |
-| Recall | 0.0000 |
-| F1 score | 0.0000 |
-| Average precision | 0.0948 |
-| ROC-AUC | 0.6778 |
-
-Its confusion matrix was:
-
-```text
-[[293   4]
- [ 17   0]]
-```
-
-These results differ from the dashboard's displayed evaluation. They must not be combined as if they came from the same run. The different ROC-AUC values also require investigation of the underlying model scores or evaluation runs.
-
-### Separate experimental Random Forest
-
-A separate Top-20-feature Random Forest experiment recorded:
-
-- Validation average precision: 0.14122
-- Test average precision: 0.06160
-- Test ROC-AUC: 0.53832
-- Test recall: 0.58824
-- Test precision: 0.06410
-- False positives: 146
-
-These results belong to an experimental candidate, not the deployed autoencoder. They indicate a substantial false-alarm risk and do not demonstrate an improvement to the deployed model.
-
-### Overall assessment
-
-WaferGuard is an academic prototype, not a production-ready wafer inspection system. The current recorded dashboard result has zero defect recall. Further model development would require careful threshold selection, investigation of temporal distribution shifts and missingness, and a clearly documented final evaluation.
-
-## 7. Installation
-
-Use a compatible Python environment and install the dependencies from the project root.
+## 9. Installation and Execution
+Activate the existing virtual environment and start Streamlit:
 
 ```powershell
-python -m pip install -r requirements.txt
+cd A:\05_Wafer\wafer-guard
+.\.venv\Scripts\Activate.ps1
+streamlit run app.py
 ```
 
-If the project virtual environment is already configured, activate it before running the application.
+Open the local URL shown in the terminal. Click **Run Model** to view the results.
 
-## 8. Run the Application
+## 10. Verification
+- Automated tests: 7 passed.
+- Dependency check: no broken requirements.
+- Existing model and preprocessor files: verified present.
+- Experimental artifacts: saved separately.
+- Streamlit interface: previously confirmed working.
 
-From the project root:
+Seven Pytest warnings were reported because smoke-test functions return strings instead of `None`. They did not cause test failures.
 
-```powershell
-python -m streamlit run app.py
-```
+## 11. Limitations
+The existing model detected only 2 of the 17 actual test defects. Its defect-detection performance is weak, and it is not suitable for production manufacturing decisions without further development and validation.
 
-Streamlit will provide a local URL in the terminal. Open that URL in your browser.
+## 12. Future Scope
+- Improve defect detection and recall.
+- Investigate sensor-label alignment and anomaly-score orientation.
+- Compare alternative detection and classification methods.
+- Validate with additional representative data.
+- Improve threshold selection and model monitoring.
 
-## 9. Validation and Smoke Tests
-
-The project includes a smoke-test script for basic application and inference checks.
-
-Run:
-
-```powershell
-python src/evaluation/final_smoke_test.py
-```
-
-The previously recorded smoke-test result was:
-
-```text
-7 passed, 0 failed
-```
-
-The checks cover dataset loading, model and preprocessor loading, single-record prediction, batch prediction, required sensor validation, nonnumeric sensor handling, and inference output shape.
-
-A passing smoke test confirms basic operational behavior; it does not establish predictive accuracy or production readiness.
-
-## 10. Project Structure
-
-```text
-wafer-guard/
-├── app.py
-├── README.md
-├── AUDIT.md
-├── requirements.txt
-├── artifacts/
-│   ├── wafer_model.pt
-│   └── preprocessor.joblib
-├── data/
-│   ├── raw/
-│   └── processed/
-├── notebooks/
-│   └── wafer_guard_fixed.ipynb
-├── src/
-│   ├── data/
-│   ├── preprocessing/
-│   ├── models/
-│   ├── services/
-│   └── evaluation/
-└── tests/
-```
-
-Additional experiment scripts and reports may also be present in the repository.
-
-## 11. Data and Artifact Policy
-
-- Raw datasets are kept out of Git commits.
-- Generated model artifacts are kept out of Git commits.
-- The current model and preprocessor are frozen for this submission.
-- Documentation cleanup must not retrain the model or overwrite its artifacts.
-- Experimental scripts must be reviewed before deciding whether to include them in the final submission.
-
-## 12. Future Improvements
-
-- Reconcile evaluation metrics against the exact saved checkpoint and test predictions.
-- Improve defect recall while controlling false alarms.
-- Investigate temporal drift and sensor missingness.
-- Compare model candidates using a documented validation process.
-- Preserve a clearly identified held-out test evaluation for a future final candidate.
-- Improve prediction explanations and monitoring.
-- Add automated regression tests and clearer experiment tracking.
-
-## 13. Conclusion
-
-WaferGuard demonstrates an end-to-end academic workflow for sensor-data preprocessing, machine learning inference, evaluation reporting, and interactive monitoring.
-
-The application and its basic inference workflow have passed the previously recorded smoke tests. However, the recorded model evaluation shows that defect detection remains inadequate. The project should therefore be presented honestly as an experimental prototype with documented limitations, rather than as a validated production solution.
+## Conclusion
+WaferGuard demonstrates a working prototype that combines sensor-data preprocessing, PyTorch inference, and Streamlit visualization. The application passes its current automated tests, but the model requires further improvement before it can be considered reliable for real manufacturing use.
