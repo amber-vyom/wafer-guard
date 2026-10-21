@@ -31,7 +31,16 @@ def _require_keys(artifact, keys, path, kind):
 
 
 def load_model(model_path=MODEL_PATH, preprocessor_path=PREPROCESSOR_PATH):
-    """Load the PyTorch autoencoder and preprocessor (default: artifacts/)."""
+    """Load the PyTorch autoencoder and preprocessor (default: artifacts/).
+
+    Returns ``(model, preprocessor, threshold)``. The model is in eval mode and is
+    built from the checkpoint's ``input_dim``, ``latent_dim`` and ``hidden_dim``
+    (older checkpoints without ``hidden_dim`` use 128). The artifact format is
+    described in docs/artifacts.md.
+
+    Raises ``FileNotFoundError`` if either file is missing and ``ValueError`` if a
+    required key is absent.
+    """
     model_path = Path(model_path)
     preprocessor_path = Path(preprocessor_path)
     if not model_path.exists():
@@ -56,6 +65,7 @@ def load_model(model_path=MODEL_PATH, preprocessor_path=PREPROCESSOR_PATH):
 
 
 def _to_dataframe(data):
+    """Accept a DataFrame, Series (one row), dict (one row) or array-like."""
     if isinstance(data, pd.Series):
         return data.to_frame().T
     if isinstance(data, dict):
@@ -66,6 +76,13 @@ def _to_dataframe(data):
 
 
 def _prepare_sensor_data(data, sensor_cols):
+    """Coerce sensors to numbers and apply the legacy PS-L rules.
+
+    ``sensor_0 == 0.0`` marks a legacy wafer: both ``sensor_0`` and ``sensor_1`` are
+    set to missing on those rows and four indicator columns are appended
+    (``is_legacy_ps_l`` and one flag per ``sensor_1`` code 100/200/300, which only
+    fires on legacy rows). Raises ``ValueError`` if a required sensor is absent.
+    """
     data = _to_dataframe(data)
     missing = [col for col in sensor_cols if col not in data.columns]
     if missing:
@@ -92,7 +109,12 @@ def _prepare_sensor_data(data, sensor_cols):
 
 
 def prepare_features(data, preprocessor):
-    """Prepare features for the legacy autoencoder."""
+    """Turn raw sensor rows into the float32 feature matrix the model expects.
+
+    Applies the legacy rules, imputes and scales ``usable_cols`` with the fitted
+    preprocessor, then appends the unscaled ``flag_cols``. Raises ``ValueError`` on
+    a feature-count mismatch or non-finite values.
+    """
     raw = _prepare_sensor_data(data, preprocessor["sensor_cols"])
     usable_cols = preprocessor["usable_cols"]
     flag_cols = preprocessor["flag_cols"]
@@ -111,6 +133,13 @@ def prepare_features(data, preprocessor):
 
 
 def predict_anomaly(model, features, threshold=0.05):
+    """Score a feature matrix.
+
+    Returns a dict with ``probabilities`` (sigmoid of the classifier logit),
+    ``predictions`` (1 where probability >= threshold), ``threshold`` and
+    ``reconstruction_errors`` (per-row mean squared error). The probabilities are
+    scores for ranking, not calibrated defect probabilities.
+    """
     values = np.asarray(features, dtype=np.float32)
     if values.ndim == 1:
         values = values.reshape(1, -1)
@@ -134,6 +163,7 @@ def predict_anomaly(model, features, threshold=0.05):
 
 
 def predict_records(data):
+    """Load the saved artifacts and score raw sensor rows end to end."""
     model, preprocessor, threshold = load_model()
     features = prepare_features(data, preprocessor)
     return predict_anomaly(model, features, threshold)

@@ -42,39 +42,80 @@ The supplied review reports 146 wafers with `sensor_0 == 0.0`, none defective. T
 
 ## 3. Required audit question: What are the true evaluation metrics at natural prevalence?
 
-The supplied current-run result is:
+All metrics below are on the chronological test partition (last 15%: 236 records, 9 defects, 3.81% prevalence). The test set has already been inspected, so these numbers are **exploratory**, not an untouched final estimate. With nine defects, one extra catch changes recall by 11 points.
 
-| Metric | Reported value |
+### 3a. Notebook run (`notebooks/wafer_guard_fixed.ipynb`, outputs saved in the notebook)
+
+Model: shared `WaferAutoencoder` (hidden 128, latent 32, 592 features), seed 1337, best checkpoint at epoch 8 by validation average precision. Threshold 0.00067027786 from validation scores for a nominal 10% alert rate.
+
+| Metric | Validation (235 rows, 17 defects) | Test (236 rows, 9 defects) |
+|---|---:|---:|
+| ROC-AUC | 0.510 | 0.679 (95% CI 0.48–0.85) |
+| Average precision | 0.078 | 0.092 (95% CI 0.03–0.27) |
+| Alert rate | 10.21% | 6.36% |
+| Confusion matrix (TN / FP / FN / TP) | 195 / 23 / 16 / 1 | 214 / 13 / 7 / 2 |
+| Precision / recall / F1 | 0.042 / 0.059 / 0.049 | 0.133 / 0.222 / 0.167 |
+
+Lift over prevalence on test is 3.5x, but it rests on two true positives, and the lower bootstrap bound of average precision (0.033) is below the natural prevalence (0.038). The notebook's reference gate is therefore **NOT MET**.
+
+### 3b. Currently deployed model (`artifacts/wafer_model.pt`, 472 features, threshold 0.001003)
+
+Evaluated with `scripts/evaluation/evaluate_model.py` on the same test partition:
+
+| Metric | Test |
 |---|---:|
-| Test records | 236 |
-| Test defects | 9 |
-| Test defect prevalence | 3.81% |
-| ROC-AUC | 0.631 |
-| ROC-AUC bootstrap 95% CI | 0.43–0.79 |
-| Average precision | 0.060 |
-| Average precision bootstrap 95% CI | 0.03–0.13 |
+| ROC-AUC | 0.747 |
+| Average precision | 0.096 |
+| TN / FP / FN / TP | 215 / 12 / 8 / 1 |
+| Precision / recall / F1 | 0.077 / 0.111 / 0.091 |
 
-The reported confusion matrix values are TP=8, FP=196, FN=1. Given 236 records and 9 defects, these imply TN=31. This corresponds to 204 flagged records (86.4% of the test set), so it is not an acceptable alert policy. The threshold policy must be selected using validation data and should target a fixed nominal alert rate (the current notebook revision uses 10%) rather than maximizing validation F1 at a near-zero threshold.
+### 3c. Earlier supplied run (historical, not reproducible)
 
-**Important:** the metrics above describe the supplied run before the fixed-alert-rate/early-stopping revision is rerun, and before the notebook switched to the shared `WaferAutoencoder` class, so they are not reproducible from the current notebook. They must not be presented as the metrics of that revised run. After rerunning the revised notebook, replace this table with its printed validation metrics, test metrics, threshold, alert rate, confusion matrix, and bootstrap confidence intervals.
+An earlier run reported test ROC-AUC 0.631 and average precision 0.060 with TP=8, FP=196, FN=1 (86% of the test set flagged). It came from a previous architecture and a near-zero F1-maximising threshold. It is kept only to document why the threshold policy was changed, and must not be cited as current performance.
 
 ## 4. Threshold and overfitting controls
 
 The notebook revision selects the threshold from validation scores for a nominal 10% alert rate, reports the actual validation/test alert rates, and selects the model checkpoint by validation average precision with patience-based early stopping. The test partition is not used for checkpoint selection or threshold selection. If tied scores cause the alert rate to exceed the target, report the actual rate rather than hiding the difference.
 
-## 5. Reproducibility and scope
+## 5. Findings on signal and drift
+
+These were produced by read-only analyses of the training and validation rows (and, where stated, test rows). They explain why every model scores near chance.
+
+**Chronological cross-validation** (4 expanding folds over the first 1,331 rows; held-out blocks hold 6, 9, 2 and 15 defects; prevalence about 7%):
+
+| Model | Mean average precision | Mean ROC-AUC |
+|---|---:|---:|
+| Logistic regression (C=0.01) | 0.106 | 0.545 |
+| Gradient boosting | 0.122 | 0.513 |
+| Autoencoder as in the notebook | 0.091 | 0.540 |
+| Autoencoder, 8 epochs | 0.089 | 0.513 |
+| Autoencoder, small and regularised (hidden 32, latent 8) | 0.111 | 0.625 |
+| Same, with input noise | 0.099 | 0.566 |
+
+Fold-to-fold swings are larger than the differences between models, and every model sits within a few points of chance.
+
+**Per-sensor diagnostic** (456 sensors with enough data):
+
+- Among the 20 sensors most associated with defects in training, only 45% point the same direction in validation (chance is 50%). Across all sensors the correlation between the training and validation associations is 0.008 (0.08 against the test period).
+- The defect rate drifts over time: 12.7%, 15.3%, 8.9%, 4.5%, 1.3%, 5.7%, 1.3%, 6.4%, 8.3%, 1.9% across ten equal time blocks.
+- All 146 legacy wafers (`sensor_0 == 0`) are non-defective, and the model already has an indicator for them; this can rule wafers out but cannot find defects.
+- Missing-cell rate is 4.3% for defects and 4.6% for normal wafers, so missingness carries no signal.
+
+**Conclusion:** with 104 defects and sensor-defect relationships that do not persist over time, further tuning is expected to fit noise. Improvement would need more or better data, a label review, or a drift-aware approach, not more model work on this dataset. These analyses were run in scratch scripts and are not committed.
+
+## 6. Reproducibility and scope
 
 - Model: PyTorch `WaferAutoencoder` (`src/models/wafer_model.py`), shared by the notebook and the app.
 - Split: one chronological 70/15/15 definition in `src/data/splits.py`, used by the notebook, the Streamlit app, and the evaluation scripts (test = last 15%, 236 rows, 9 defects).
 - Artifacts: the notebook saves `artifacts/wafer_model.pt` and `artifacts/preprocessor.joblib` in the format the app loads, backs up any existing copies, and ends with a parity check that reloads them through the app's inference code.
 - Tests: `python -m pytest` covers the split, legacy-sensor feature rules, model shapes, and train/serve parity on synthetic data. It does not measure model quality.
-- Notebook: `notebooks/wafer_guard_fixed.ipynb` (use the revised notebook after merging it).
+- Notebook: `notebooks/wafer_guard_fixed.ipynb`, with outputs saved from a run on 2026-10-22. Re-running it with the default settings replaces `artifacts/wafer_model.pt` (after making a timestamped backup).
 - Dataset is not tracked in Git. Obtain an authorized copy and place it at `data/raw/secom_telemetry_modified.csv`.
 - Run all cells from a fresh kernel. Notebook outputs must be generated by the code being submitted.
 - The test set has already been inspected; no future evaluation should be described as an untouched final test without a newly held-out dataset.
 - No claim of production readiness is made.
 
-## 6. Limitations
+## 7. Limitations
 
 - Only nine defects are present in the reported test partition, so uncertainty is substantial.
 - The ROC-AUC and average-precision intervals are wide.

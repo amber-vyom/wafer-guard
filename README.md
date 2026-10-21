@@ -1,34 +1,54 @@
 # WaferGuard — Wafer Defect Anomaly Detection
 
-## 1. Overview
+WaferGuard is an academic prototype that scores semiconductor wafer sensor records with a PyTorch supervised autoencoder and shows the results in a Streamlit app.
 
-WaferGuard is a Python-based prototype for analyzing semiconductor wafer sensor data and identifying potentially defective records using a PyTorch model. The application provides a Streamlit interface for running inference and viewing prediction results.
+> **Status: NO-GO for production.** On a held-out test set with 9 defects, the models score only slightly better than chance, and an analysis of the data suggests the sensor signal does not hold up over time. See [AUDIT.md](AUDIT.md) for the evidence.
 
-The project combines sensor-data processing, feature preparation, model inference, and dashboard visualization.
+## Quick start
 
-**Project status:** Academic prototype. The model's evaluation results and limitations must be considered before using its predictions for any manufacturing decision.
+```powershell
+cd A:\05_Wafer\wafer-guard
+.\.venv\Scripts\Activate.ps1          # or create a venv and: pip install -r requirements.txt
+python -m pytest                       # 23 tests on synthetic data
+python src\evaluation\smoke_test.py    # 7 checks against the real artifacts
+streamlit run app.py                   # then click "Run Model"
+```
 
-## 2. Problem Statement
+The dataset and model artifacts are not in Git. Place the dataset at `data/raw/secom_telemetry_modified.csv`; see [Artifacts](#artifacts) for the model files.
 
-Semiconductor manufacturing generates large volumes of sensor telemetry. Identifying unusual patterns in these measurements can help flag wafers that may require further inspection.
+## Results at a glance
 
-WaferGuard demonstrates a local application workflow for analyzing sensor data and presenting model predictions. It is intended as an academic project, not a validated production inspection system.
+Test partition: the last 15% of rows (236 wafers, 9 defects, 3.81% prevalence). The test set has been inspected before, so every figure is **exploratory**.
 
-## 3. Objectives
+| Model | ROC-AUC | Average precision | Defects caught | False alarms |
+|---|---:|---:|---:|---:|
+| Deployed autoencoder (472 features) | 0.747 | 0.096 | 1 of 9 | 12 |
+| Notebook autoencoder (592 features) | 0.679 | 0.092 | 2 of 9 | 13 |
 
-- Load semiconductor sensor telemetry.
-- Prepare sensor features for inference.
-- Apply the existing PyTorch model.
-- Display predictions through a Streamlit dashboard.
-- Evaluate model performance using held-out data.
-- Keep application artifacts separate from experimental artifacts.
-- Document limitations and reproducibility requirements.
+A model with no skill would score an average precision near the 3.8% prevalence. With nine defects, one extra catch moves recall by 11 points and the confidence intervals are wide. The full tables, confidence intervals and the reason these numbers are weak are in [AUDIT.md](AUDIT.md).
 
-## 4. Dataset
+## How it works
 
-**Primary dataset:** `data/raw/secom_telemetry_modified.csv`
+```mermaid
+flowchart LR
+    A[CSV: sensors, label, timestamp] --> B[Sort by timestamp<br/>src/data/splits.py]
+    B --> C[Split 70 / 15 / 15]
+    C --> D[Legacy rules + impute + scale<br/>prediction_service.py]
+    D --> E[WaferAutoencoder<br/>src/models/wafer_model.py]
+    E --> F[Score, threshold, alert]
+    F --> G[Streamlit app / scripts]
+```
 
-The documented dataset contains 1,567 records.
+1. **Split.** Rows are ordered by timestamp (stable sort) and cut chronologically: the earliest 70% train, the next 15% choose the checkpoint and threshold, the last 15% are the test set. The cut lives in `src/data/splits.py` and is shared by the notebook, the app and the scripts.
+2. **Features.** `sensor_0 == 0.0` marks a legacy wafer; those rows get missing values for `sensor_0` and `sensor_1` plus four indicator columns. Everything else is median-imputed and standardised using training rows only.
+3. **Model.** `WaferAutoencoder` reconstructs the features and has a classifier head on the latent layer; the sigmoid of that head is the defect score. A wafer is flagged when its score reaches the threshold.
+4. **Serving.** The app and scripts load the saved model and preprocessor through `src/services/prediction_service.py`.
+
+Terms are defined in [docs/glossary.md](docs/glossary.md).
+
+## Dataset
+
+`data/raw/secom_telemetry_modified.csv`: 1,567 records, 590 sensors, labels `-1` (normal) and `+1` (defect).
 
 | Partition | Records | Defects | Defect prevalence |
 |---|---:|---:|---:|
@@ -37,231 +57,63 @@ The documented dataset contains 1,567 records.
 | Test | 236 | 9 | 3.81% |
 | **Total** | **1,567** | **104** | **6.64%** |
 
-The split is chronological: the earliest 70% of records (ordered by timestamp, stable sort) are training, the next 15% are validation, and the latest 15% are the held-out test partition. It is defined once in `src/data/splits.py` and shared by the notebook, the Streamlit app, and the evaluation scripts, so every reported number refers to the same rows.
+The saved model in `artifacts/` was trained under an earlier 70/10/20 split (first 70% for training), so the final 15% is also unseen by it. Do not commit private or restricted data.
 
-The saved model in `artifacts/` was trained under an earlier 70/10/20 split (first 70% for training), so the final 15% is also unseen by it.
+## Artifacts
 
-The documented target labels are:
+Two model versions can coexist; both load through the same code.
 
-- `-1`: Normal
-- `+1`: Defect
+| | Deployed model | Notebook output |
+|---|---|---|
+| Files | `artifacts/wafer_model.pt`, `artifacts/preprocessor.joblib` | the same names, written by the notebook |
+| Features | 472 | 592 |
+| Threshold | 0.001003 | set for a 10% alert rate on each run |
 
-The test partition contains 9 defective records, so any test metric carries wide uncertainty. Since the dataset is imbalanced, accuracy alone is not sufficient to assess defect-detection performance.
+A separate gradient-boosting candidate lives at `artifacts/experiments/wafer_guard_final_gb.joblib`; its threshold of 0.5 is a provisional placeholder.
 
-## 5. Technology Stack
+Keys, feature layout and the two versions are documented in [docs/artifacts.md](docs/artifacts.md). The saved `preprocessor.joblib` originally lacked `sensor_cols` and `feature_cols`; they were added with `scripts/maintenance/repair_preprocessor.py` and the original is kept as `artifacts/preprocessor_before_metadata_fix.joblib`. The model weights and fitted imputer and scaler are unchanged.
 
-- Python
-- PyTorch
-- Pandas
-- NumPy
-- Scikit-learn
-- Streamlit
-- Joblib
-- Git and GitHub
-
-## 6. Architecture
-
-The application follows this general workflow:
-
-1. Load sensor telemetry from the configured CSV file.
-2. Convert sensor measurements into the expected numeric representation.
-3. Apply the existing preprocessing pipeline.
-4. Load the saved PyTorch model and preprocessor.
-5. Generate prediction scores and classifications.
-6. Present the results in the Streamlit interface.
-7. Use the project's evaluation utilities to inspect model behavior.
-
-The saved model and preprocessor determine the inference behavior. This documentation does not claim that the model or preprocessing pipeline has been modified during the current repository cleanup.
-
-## 7. Main Files and Directories
-
-| Path | Purpose |
-|---|---|
-| `app.py` | Streamlit application entry point |
-| `src/models/wafer_model.py` | PyTorch model definition |
-| `src/services/prediction_service.py` | Prediction and preprocessing service; validates the artifacts it loads |
-| `src/data/splits.py` | The single chronological train/validation/test split definition |
-| `tests/` | Pytest suite (synthetic data only; does not need the dataset or artifacts) |
-| `scripts/training/`, `scripts/evaluation/`, `scripts/maintenance/` | Gradient-boosting trainer, evaluation and threshold scripts, preprocessor metadata repair |
-| `archive/experiments/` | Retired one-off experiments (not maintained) |
-| `src/evaluation/smoke_test.py` | Standalone application smoke test |
-| `notebooks/wafer_guard_fixed.ipynb` | Training and evaluation workflow; saves `artifacts/wafer_model.pt` and `artifacts/preprocessor.joblib` in the format the app loads |
-| `data/raw/secom_telemetry_modified.csv` | Primary sensor dataset |
-| `artifacts/wafer_model.pt` | Existing application model artifact |
-| `artifacts/preprocessor.joblib` | Existing application preprocessing artifact |
-| `artifacts/experiments/` | Intended location for experimental artifacts and reports |
-
-The model and preprocessor are expected at their configured local paths. Generated artifacts are not tracked in Git, so a fresh checkout may require the authorized artifact files to be supplied separately.
-
-The actual repository tree should be consulted to confirm the presence of individual files and directories.
-
-## 8. Final PyTorch Model Evaluation
-
-This section is reserved for the **final PyTorch model's evaluation results**.
-
-Only results corresponding to the selected final PyTorch checkpoint and its identified evaluation run should be reported here. Older dashboard outputs and experimental model results from different runs are not treated as final results.
-
-The final evaluation should identify the test dataset, checkpoint, classification threshold where applicable, and relevant metrics. Useful metrics include:
-
-- Precision
-- Recall
-- F1-score
-- Average precision
-- ROC-AUC
-- Confusion matrix
-
-Because the dataset is imbalanced, defect recall and false alarms are important when interpreting the results.
-
-The final metrics should be copied from the verified final PyTorch evaluation report. This README does not substitute unverified historical results for the final evaluation.
-
-## 9. Installation and Execution
-
-### 9.1 Prerequisites
-
-- A compatible Python installation.
-- Required project dependencies.
-- The primary dataset at the configured path.
-- The existing model and preprocessor artifacts at their configured local paths.
-
-### 9.2 Activate the virtual environment
-
-Open PowerShell in the project directory:
-
-```powershell
-cd A:\05_Wafer\wafer-guard
-.\.venv\Scripts\Activate.ps1
-```
-
-If the virtual environment is unavailable, create one using a compatible Python version and install the project's required dependencies.
-
-### 9.3 Check dependencies
-
-```powershell
-python -m pip check
-```
-
-This command checks installed package dependency compatibility. It does not verify model performance.
-
-### 9.4 Run the standalone smoke test
-
-```powershell
-python .\src\evaluation\smoke_test.py
-```
-
-The smoke test checks selected application behaviors, including data loading, model and preprocessor loading, inference, and input validation.
-
-The recorded result is seven checks passed. The smoke test is a standalone script, separate from the pytest suite below.
-
-### 9.5 Run the pytest suite
-
-```powershell
-python -m pytest
-```
-
-The suite uses small synthetic data. It covers the split, the legacy-sensor feature rules, the model class, and train/serve parity (what the notebook saves is what the app loads). It does not evaluate model quality.
-
-### 9.6 Launch the Streamlit application
-
-```powershell
-streamlit run app.py
-```
-
-Open the local URL printed in the terminal and click **Run Model** to view the application results.
-
-Successful application startup does not, by itself, establish that the model reliably detects defective wafers.
-
-### 9.7 Regenerate artifacts and reports
+### Regenerate artifacts and reports
 
 | Goal | Command |
 |---|---|
-| Retrain the PyTorch model and preprocessor | Run all cells of `notebooks/wafer_guard_fixed.ipynb` from a fresh kernel (backs up existing artifacts as timestamped `.bak` files, then checks app parity) |
-| Add missing metadata to an older `preprocessor.joblib` | `python scripts/maintenance/repair_preprocessor.py` |
+| Retrain the autoencoder and preprocessor | Run all cells of `notebooks/wafer_guard_fixed.ipynb` from a fresh kernel. It backs up existing artifacts as timestamped `.bak` files, then checks that the app reproduces its features, scores and alerts. Set `WAFERGUARD_ARTIFACT_DIR` to write elsewhere. |
+| Add missing metadata to an older preprocessor | `python scripts/maintenance/repair_preprocessor.py` |
 | Retrain the gradient-boosting candidate | `python scripts/training/train_model.py` |
-| Evaluate the saved PyTorch model on the test partition | `python scripts/evaluation/evaluate_model.py` |
+| Evaluate the saved autoencoder on the test partition | `python scripts/evaluation/evaluate_model.py` |
 | Write the gradient-boosting evaluation report | `python scripts/evaluation/generate_evaluation_report.py` |
 | Threshold diagnostic on the validation partition | `python scripts/evaluation/validate_threshold.py` |
 
-Set `WAFERGUARD_ARTIFACT_DIR` before running the notebook to write the new artifacts somewhere other than `artifacts/`.
+## Repository layout
 
-## 10. Verification Status
+| Path | Purpose |
+|---|---|
+| `app.py` | Streamlit app |
+| `src/data/splits.py` | The single train/validation/test split definition |
+| `src/models/wafer_model.py` | `WaferAutoencoder` |
+| `src/services/prediction_service.py` | Loading, feature preparation and scoring; validates artifacts |
+| `src/evaluation/smoke_test.py` | Standalone smoke test (7 checks) |
+| `notebooks/wafer_guard_fixed.ipynb` | Training and evaluation workflow, outputs saved |
+| `scripts/` | Training, evaluation and maintenance scripts |
+| `tests/` | Pytest suite (synthetic data; no dataset or artifacts needed) |
+| `reports/experiments/` | Saved experiment results |
+| `archive/` | Retired experiments and earlier app versions (not maintained) |
+| `docs/` | Artifact format and glossary |
+| `AUDIT.md`, `CHANGELOG.md`, `CONTRIBUTING.md` | Audit evidence, change history, contribution rules |
 
-The following checks have previously been recorded for the development environment:
+## Verification status
 
-- **Standalone smoke test:** Seven checks passed.
-- **Dependency check:** `pip check` was reported clean.
-- **Pytest suite:** 23 tests passed (synthetic data; does not measure model quality).
-- **Streamlit interface:** Previously confirmed working.
-- **Preprocessor configuration:** The inspected local preprocessor contains 472 expected features.
-- **Final model evaluation:** Final PyTorch metrics should be taken from the verified final evaluation report.
-- **Production validation:** Not established.
+- **Pytest:** 23 tests pass. They check the split, feature rules, model shapes and train/serve parity; they do not measure model quality.
+- **Smoke test:** 7 of 7 checks pass against the saved artifacts.
+- **Notebook:** executed end to end with outputs saved, including the parity check.
+- **Production validation:** not established.
 
-These statements describe previously recorded checks. They should not be interpreted as proof that every environment, artifact, or model evaluation has been independently validated.
+## Limitations
 
-## 11. Limitations
+- Only nine defects are in the test partition, so every test metric is highly uncertain.
+- Accuracy is misleading at about 4–7% prevalence; look at average precision, alert rate and false alarms.
+- Sensor-defect relationships do not persist across time periods (see [AUDIT.md](AUDIT.md), section 5), and the defect rate drifts from over 12% early in the data to under 2% late.
+- Scores rank wafers; they are not calibrated defect probabilities.
+- Successful startup or passing tests does not show the model detects defects reliably.
 
-- Model performance must be judged using the verified final PyTorch evaluation results.
-- Imbalanced labels can make accuracy misleading.
-- Sensor missingness and distribution changes may affect generalization.
-- Preprocessing and tensor-shape checks alone do not establish reliable defect detection.
-- Generated model artifacts may need to be obtained separately.
-- Successful application execution does not establish suitability for production manufacturing decisions.
-
-WaferGuard remains an academic prototype rather than a validated wafer inspection system.
-
-## 12. Scope of the Current Cleanup
-
-The current repository cleanup is restricted to static changes: documentation, repository layout, a shared split and model definition, tests, and aligning the notebook's saved artifacts with the app's loader.
-
-It does not include:
-
-- Retraining or replacing the model.
-- Changing the model architecture or inference behavior.
-- Changing preprocessing logic.
-- Regenerating model artifacts.
-- Running training or threshold experiments.
-- Claiming new model-performance results.
-
-The saved model weights and the preprocessor's fitted imputer and scaler are unchanged. The only artifact edit was adding the missing `sensor_cols` and `feature_cols` metadata to `preprocessor.joblib` with `scripts/maintenance/repair_preprocessor.py`; the original was kept as `artifacts/preprocessor_before_metadata_fix.joblib`.
-
-## 13. Future Scope
-
-Potential future work, outside the current static-cleanup scope, includes:
-
-- Improving defect detection and recall.
-- Investigating sensor-label alignment and anomaly-score orientation.
-- Comparing alternative detection and classification methods.
-- Evaluating model changes using validation data.
-- Recording the exact checkpoint and metrics for each evaluation run.
-- Reserving a clearly identified held-out test evaluation for the final candidate.
-- Validating the system with additional representative data.
-- Improving threshold selection and monitoring.
-
-These items describe possible future development, not completed changes.
-
-## Conclusion
-
-WaferGuard demonstrates a local workflow combining semiconductor sensor telemetry, preprocessing, PyTorch inference, and Streamlit visualization.
-
-The current cleanup focuses on accurate documentation and repository hygiene while preserving the existing model and its artifacts. The final PyTorch evaluation results should be reported consistently from the verified final evaluation run.
-
-The project should be treated as an academic prototype until its defect-detection performance and suitability for its intended use are adequately validated.
-## Dataset Setup
-
-The dataset is not tracked in this repository.
-
-Before running the notebook, obtain an authorized copy of the dataset and place it at:
-
-`data/raw/secom_telemetry_modified.csv`
-
-The notebook also supports `secom_telemetry_modified.csv` beside the notebook.
-
-Do not commit private, restricted, or evaluator-only data to Git.
-
-## Run the Notebook
-
-Open `notebooks/wafer_guard_fixed.ipynb` in VS Code, select the project's Python environment, and run all cells from a fresh kernel.
-
-The notebook trains the same `WaferAutoencoder` class the app serves and saves `artifacts/wafer_model.pt` and `artifacts/preprocessor.joblib`. Any existing copies are first backed up with a timestamp, and the notebook finishes by reloading the saved files through the app's inference code and checking that features, scores and alerts match.
-
-Previously inspected test results are exploratory and must not be presented as an untouched final test estimate.
-
+WaferGuard remains an academic prototype, not a validated inspection system.
