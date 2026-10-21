@@ -217,3 +217,21 @@ WaferGuard demonstrates a local workflow combining semiconductor sensor telemetr
 The current cleanup focuses on accurate documentation and repository hygiene while preserving the existing model and its artifacts. The final PyTorch evaluation results should be reported consistently from the verified final evaluation run.
 
 The project should be treated as an academic prototype until its defect-detection performance and suitability for its intended use are adequately validated.
+## Dataset Setup
+
+The dataset is not tracked in this repository.
+
+Before running the notebook, obtain an authorized copy of the dataset and place it at:
+
+`data/raw/secom_telemetry_modified.csv`
+
+The notebook also supports `secom_telemetry_modified.csv` beside the notebook.
+
+Do not commit private, restricted, or evaluator-only data to Git.
+
+## Run the Notebook
+
+Open `notebooks/wafer_guard_fixed.ipynb` in VS Code, select the project's Python environment, and run all cells from a fresh kernel.
+
+Previously inspected test results are exploratory and must not be presented as an untouched final test estimate.
+
