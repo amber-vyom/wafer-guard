@@ -1,4 +1,5 @@
-﻿from pathlib import Path
+from pathlib import Path
+import sys
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -9,9 +10,14 @@ from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from src.data.splits import sort_chronologically, split_bounds
 from src.services.prediction_service import predict_records
 
-path = Path("data/raw/secom_telemetry_modified.csv")
+path = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
 df = pd.read_csv(path)
 
 # Identify the label and timestamp columns.
@@ -25,14 +31,10 @@ if len(targets) != 1 or len(times) != 1:
     raise ValueError(f"Could not identify label/time columns. Columns: {df.columns.tolist()}")
 
 target_col, time_col = targets[0], times[0]
-df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
-if df[time_col].isna().any():
-    raise ValueError("Invalid timestamps found; refusing an unreliable split.")
-
-df = df.sort_values(time_col).reset_index(drop=True)
-
-# Chronological 70/10/20 split. Evaluate only the final 20%.
-test = df.iloc[int(len(df) * 0.80):].copy()
+# Evaluate only the held-out test partition of the shared chronological split.
+df = sort_chronologically(df, time_col)
+_, validation_end = split_bounds(len(df))
+test = df.iloc[validation_end:].copy()
 labels = pd.to_numeric(test[target_col], errors="coerce")
 
 if labels.isna().any() or not set(labels.unique()).issubset({-1, 1}):

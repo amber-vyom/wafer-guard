@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
@@ -8,6 +9,9 @@ from sklearn.preprocessing import StandardScaler
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_PATH = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
+
+sys.path.insert(0, str(ROOT))
+from src.data.splits import split_bounds
 
 # 1. Load and order the observations.
 df = pd.read_csv(DATA_PATH)
@@ -18,8 +22,7 @@ sensor_cols = [c for c in df.columns if c.startswith("sensor_")]
 
 # 2. Chronological train / validation / test split.
 n = len(df)
-train_end = int(n * 0.70)
-val_end = int(n * 0.80)
+train_end, val_end = split_bounds(n)
 
 train_df = df.iloc[:train_end].copy()
 val_df = df.iloc[train_end:val_end].copy()

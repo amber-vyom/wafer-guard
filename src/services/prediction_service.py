@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -14,19 +14,42 @@ FINAL_MODEL_PATH = (
     ROOT / "artifacts" / "experiments" / "wafer_guard_final_gb.joblib"
 )
 
+REQUIRED_CHECKPOINT_KEYS = ("model_state_dict", "input_dim", "threshold")
+REQUIRED_PREPROCESSOR_KEYS = (
+    "imputer", "scaler", "sensor_cols", "usable_cols", "flag_cols", "feature_cols"
+)
 
-def load_model():
-    """Load the existing PyTorch autoencoder and preprocessor."""
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
-    if not PREPROCESSOR_PATH.exists():
-        raise FileNotFoundError(f"Preprocessor not found: {PREPROCESSOR_PATH}")
+
+def _require_keys(artifact, keys, path, kind):
+    missing = [key for key in keys if key not in artifact]
+    if missing:
+        raise ValueError(
+            f"{kind} {path.name} is missing {missing}. Re-run the training notebook; "
+            "an older preprocessor can be fixed with "
+            "scripts/maintenance/repair_preprocessor.py."
+        )
+
+
+def load_model(model_path=MODEL_PATH, preprocessor_path=PREPROCESSOR_PATH):
+    """Load the PyTorch autoencoder and preprocessor (default: artifacts/)."""
+    model_path = Path(model_path)
+    preprocessor_path = Path(preprocessor_path)
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+    if not preprocessor_path.exists():
+        raise FileNotFoundError(f"Preprocessor not found: {preprocessor_path}")
 
     checkpoint = torch.load(
-        MODEL_PATH, map_location="cpu", weights_only=True
+        model_path, map_location="cpu", weights_only=True
     )
-    preprocessor = joblib.load(PREPROCESSOR_PATH)
-    model = WaferAutoencoder(input_dim=checkpoint["input_dim"])
+    preprocessor = joblib.load(preprocessor_path)
+    _require_keys(checkpoint, REQUIRED_CHECKPOINT_KEYS, model_path, "Checkpoint")
+    _require_keys(preprocessor, REQUIRED_PREPROCESSOR_KEYS, preprocessor_path, "Preprocessor")
+    model = WaferAutoencoder(
+        input_dim=checkpoint["input_dim"],
+        latent_dim=checkpoint.get("latent_dim", 32),
+        hidden_dim=checkpoint.get("hidden_dim", 128),
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     return model, preprocessor, float(checkpoint["threshold"])
@@ -155,50 +178,4 @@ def predict_final_records(data):
         "predictions": predictions.tolist(),
         "threshold": threshold,
         "parameters": artifact["parameters"],
-    }
-
-
-def prepare_supervised_features(data, artifact):
-    """Compatibility helper for older supervised artifacts."""
-    raw = _prepare_sensor_data(data, artifact["sensor_cols"])
-    usable_cols = artifact["usable_cols"]
-    flag_cols = artifact["flag_cols"]
-    imputed = artifact["imputer"].transform(raw[usable_cols])
-
-    if "scaler" in artifact:
-        imputed = artifact["scaler"].transform(imputed)
-
-    flags = raw[flag_cols].to_numpy(dtype=np.float32)
-    features = np.column_stack([imputed, flags]).astype(np.float32)
-    expected = artifact["input_dim"]
-
-    if features.shape[1] != expected or not np.isfinite(features).all():
-        raise ValueError("Prepared supervised features do not match the model.")
-    return features
-
-
-def predict_supervised_records(data, model_name):
-    """Compatibility helper for existing candidate models."""
-    paths = {
-        "Random Forest": ROOT / "artifacts" / "experiments" / "wafer_random_forest_candidate.joblib",
-        "HistGradientBoosting": ROOT / "artifacts" / "experiments" / "wafer_hist_gradient_boosting_candidate.joblib",
-    }
-    if model_name not in paths:
-        raise ValueError(f"Unknown model: {model_name}")
-
-    path = paths[model_name]
-    if not path.exists():
-        raise FileNotFoundError(f"Candidate artifact not found: {path}")
-
-    artifact = joblib.load(path)
-    features = prepare_supervised_features(data, artifact)
-    probabilities = artifact["model"].predict_proba(features)[:, 1]
-    threshold = float(artifact["threshold"])
-    predictions = (probabilities >= threshold).astype(int)
-
-    return {
-        "model_name": model_name,
-        "probabilities": probabilities.tolist(),
-        "predictions": predictions.tolist(),
-        "threshold": threshold,
     }
