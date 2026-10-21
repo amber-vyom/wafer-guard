@@ -340,3 +340,59 @@ This audit addresses the GDG brief's three silent-bug categories: data leakage, 
 The existing PyTorch model remains the final application model. Its previously recorded result detects 2 of 17 defective test records, demonstrating that the current defect-detection performance is limited.
 
 The final recommendation is **NO-GO for production deployment**. The current submission should be presented as an academic prototype, without claiming that static documentation changes improve model performance.
+---
+
+## Latest Evaluation Evidence — Exploratory Results
+
+The following values were copied from the notebook execution output shared on 21 October 2026. The test set has already been inspected, so these results are exploratory and must not be presented as an untouched final test estimate.
+
+### Dataset split
+
+| Partition | Records | Defect prevalence |
+|---|---:|---:|
+| Training | 1,096 | 7.12% |
+| Validation | 157 | 5.73% |
+| Test | 314 | 5.41% |
+
+### Forward-chaining evaluation
+
+The reported pooled out-of-fold evaluation covers 627 records and 22 defects, with a defect prevalence of 3.51%.
+
+- Pooled average precision: 0.0401
+- Pooled ROC-AUC: 0.4067
+- Fold ROC-AUC values: 0.495, 0.524, and 0.402
+- Fold average precision values: 0.078, 0.040, and 0.040
+
+These results do not demonstrate reliable ranking of future defects.
+
+### Exploratory test results
+
+The notebook output reports 314 test records, including 17 defects.
+
+- Average precision: 0.09348
+- ROC-AUC: 0.65993
+- Primary reported threshold: 0.0010033317
+- Flagged records: 19 of 314
+- True positives: 2
+- False positives: 17
+- True negatives: 280
+- False negatives: 15
+- Precision: 10.53%
+- Recall: 11.76%
+- F1 score: 11.11%
+
+Confusion matrix, with rows representing actual classes and columns representing predicted classes:
+
+| | Predicted non-defect | Predicted defect |
+|---|---:|---:|
+| Actual non-defect | 280 | 17 |
+| Actual defect | 15 | 2 |
+
+### Interpretation and release decision
+
+The reported exploratory test result detects only 2 of 17 defects and produces 17 false alarms. The forward-chaining ROC-AUC of 0.4067 is also concerning. The release decision remains **NO-GO for production**.
+
+The execution output also contains a configuration with `max_iter`, `learning_rate`, and `max_leaf_nodes`. These values suggest a non-PyTorch estimator may be involved. Until the executed notebook and estimator are verified, the metrics in this addendum are attributed to the supplied execution output, not specifically to the final PyTorch model.
+
+No bootstrap confidence intervals were present in the supplied output; none are claimed here.
+
