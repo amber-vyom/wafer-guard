@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -7,10 +7,38 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, average_precision_score
 )
-from src.services.prediction_service import predict_records
+from src.data.splits import (
+    TRAIN_FRACTION,
+    VALIDATION_FRACTION,
+    sort_chronologically,
+    split_bounds,
+)
+from src.services.prediction_service import (
+    MODEL_PATH,
+    PREPROCESSOR_PATH,
+    load_model,
+    predict_anomaly,
+    prepare_features,
+)
 
 ROOT = Path(__file__).resolve().parent
 DATA_PATH = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
+TEST_SHARE = 1 - TRAIN_FRACTION - VALIDATION_FRACTION
+
+
+# The modification times are cache keys: replacing a file reloads it.
+@st.cache_data
+def load_data(path, modified):
+    return pd.read_csv(path)
+
+
+@st.cache_resource
+def load_artifacts(model_modified, preprocessor_modified):
+    return load_model()
+
+
+def modified_time(path):
+    return path.stat().st_mtime if path.exists() else None
 
 st.set_page_config(page_title="WaferGuard", page_icon="🔬", layout="centered")
 
@@ -25,12 +53,12 @@ if not DATA_PATH.exists():
     st.error(f"Dataset not found: {DATA_PATH}")
     st.stop()
 
-df = pd.read_csv(DATA_PATH)
+df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
 
 st.button("Run Model", type="primary", key="run_model")
 
 if st.session_state.get("run_model", False):
-    # Use the final chronological 20% as the test segment.
+    # Use the held-out chronological test partition (see src/data/splits.py).
     time_cols = [
         c for c in df.columns
         if str(c).lower().replace("_", "").replace(" ", "")
@@ -47,14 +75,14 @@ if st.session_state.get("run_model", False):
         st.stop()
 
     time_col, target_col = time_cols[0], target_cols[0]
-    df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
-
-    if df[time_col].isna().any():
+    try:
+        df = sort_chronologically(df, time_col)
+    except ValueError:
         st.error("Invalid timestamps found. Test evaluation was stopped.")
         st.stop()
 
-    df = df.sort_values(time_col).reset_index(drop=True)
-    test = df.iloc[int(len(df) * 0.8):].copy()
+    _, validation_end = split_bounds(len(df))
+    test = df.iloc[validation_end:].copy()
     labels = pd.to_numeric(test[target_col], errors="coerce")
 
     if labels.isna().any() or not set(labels.unique()).issubset({-1, 1}):
@@ -64,7 +92,12 @@ if st.session_state.get("run_model", False):
     y_true = (labels.to_numpy() == 1).astype(int)
 
     try:
-        result = predict_records(test)
+        model, preprocessor, saved_threshold = load_artifacts(
+            modified_time(MODEL_PATH), modified_time(PREPROCESSOR_PATH)
+        )
+        result = predict_anomaly(
+            model, prepare_features(test, preprocessor), saved_threshold
+        )
         scores = np.asarray(result["probabilities"], dtype=float)
         y_pred = np.asarray(result["predictions"], dtype=int)
         threshold = float(result["threshold"])
@@ -87,6 +120,8 @@ if st.session_state.get("run_model", False):
         ("Defects detected", f"{tp}/{int(y_true.sum())}"),
         ("Defects missed", fn),
         ("False alarms", fp),
+        ("Alert rate", f"{y_pred.mean():.2%}"),
+        ("Defect prevalence", f"{y_true.mean():.2%}"),
         ("Accuracy", f"{accuracy_score(y_true, y_pred):.2%}"),
         ("Precision", f"{precision_score(y_true, y_pred, zero_division=0):.2%}"),
         ("Recall", f"{recall_score(y_true, y_pred, zero_division=0):.2%}"),
@@ -98,8 +133,14 @@ if st.session_state.get("run_model", False):
     ]
 
     st.subheader("Final Model — Test Results")
-    st.caption("Results are calculated from the saved model on the final chronological 20% of the dataset.")
-    st.table(pd.DataFrame(metrics, columns=["Evaluation Metric", "Result"]))
+    st.caption(
+        f"Results are calculated from the saved model on the final chronological "
+        f"{TEST_SHARE:.0%} of the dataset, which is held out from training and validation."
+    )
+    st.table(pd.DataFrame(
+        [(name, str(value)) for name, value in metrics],
+        columns=["Evaluation Metric", "Result"],
+    ))
 
     st.subheader("Model Performance Graph")
     graph_values = {

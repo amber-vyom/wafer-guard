@@ -1,12 +1,17 @@
-﻿from pathlib import Path
+from pathlib import Path
 import json
+import sys
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from src.data.splits import split_bounds
+
 DATA = ROOT / "data" / "raw" / "secom_telemetry_modified.csv"
 OUT = ROOT / "artifacts" / "experiments"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -38,7 +43,7 @@ def get_features(part):
     return X, y
 
 # Fit on the original training partition only.
-train_end = int(len(df) * 0.70)
+train_end, _ = split_bounds(len(df))
 X_raw, y = get_features(df.iloc[:train_end])
 sensor_cols_used = [
     c for c in sensor_cols

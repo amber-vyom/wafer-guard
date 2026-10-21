@@ -1,8 +1,8 @@
-﻿from pathlib import Path
+from pathlib import Path
 import joblib
 import pandas as pd
 
-root = Path(__file__).resolve().parent
+root = Path(__file__).resolve().parents[2]
 artifact_path = root / "artifacts" / "preprocessor.joblib"
 data_path = root / "data" / "raw" / "secom_telemetry_modified.csv"
 

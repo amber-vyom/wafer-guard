@@ -1,14 +1,27 @@
-﻿from pathlib import Path
+from datetime import datetime
+from pathlib import Path
 import json
+import sys
 import pandas as pd
 from sklearn.metrics import (
     confusion_matrix, precision_score, recall_score,
     f1_score, average_precision_score, roc_auc_score
 )
-from src.services.prediction_service import predict_final_records
 
-root = Path(__file__).resolve().parent
-df = pd.read_csv(root / "data" / "raw" / "secom_telemetry_modified.csv")
+root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root))
+
+from src.data.splits import (
+    TRAIN_FRACTION,
+    VALIDATION_FRACTION,
+    sort_chronologically,
+    split_bounds,
+)
+from src.services.prediction_service import FINAL_MODEL_PATH, predict_final_records
+
+df = sort_chronologically(
+    pd.read_csv(root / "data" / "raw" / "secom_telemetry_modified.csv")
+)
 
 # Identify the true label column.
 candidates = ["label", "target", "pass_fail", "pass/fail", "class"]
@@ -37,8 +50,8 @@ else:
         "Confirm which label means defective before evaluating."
     )
 
-# Preserve the existing chronological 70/10/20 split.
-test_start = int(len(df) * 0.80)
+# Held-out test partition of the shared chronological split.
+_, test_start = split_bounds(len(df))
 test_df = df.iloc[test_start:].copy()
 y = y_all.iloc[test_start:].to_numpy()
 
@@ -63,6 +76,17 @@ report = {
     "precision_percent": round(100 * precision_score(y, pred, zero_division=0), 2),
     "f1_score": round(f1_score(y, pred, zero_division=0), 4),
     "threshold": float(result["threshold"]),
+    "split": {
+        "train_fraction": TRAIN_FRACTION,
+        "validation_fraction": VALIDATION_FRACTION,
+        "test_start_row": int(test_start),
+        "test_start_timestamp": str(test_df["timestamp"].iloc[0]),
+        "test_end_timestamp": str(test_df["timestamp"].iloc[-1]),
+    },
+    "model_artifact": FINAL_MODEL_PATH.relative_to(root).as_posix(),
+    "model_artifact_modified": datetime.fromtimestamp(
+        FINAL_MODEL_PATH.stat().st_mtime
+    ).isoformat(timespec="seconds"),
 }
 
 if len(set(y)) == 2:
